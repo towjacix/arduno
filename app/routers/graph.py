@@ -4,7 +4,6 @@ from fastapi import APIRouter, Response
 
 import app.database as database
 
-
 __all__ = ["router"]
 
 router = APIRouter()
@@ -15,11 +14,21 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
     if database.db is None:
         return Response(content="Database Error", status_code=500)
 
-    # Khai báo biến phạm vi an toàn để tránh lỗi linter
+    # FIX: Xử lý lỗi nếu incident_id không phải số nguyên hợp lệ
     target_id: int = 0
     is_latest = incident_id == "latest"
     current_status = "safe"
     is_active: bool = False
+
+    if not is_latest:
+        try:
+            target_id = int(incident_id)
+        except ValueError:
+            return Response(
+                content="<div class='padding center-align'>ID sự cố không hợp lệ.</div>",
+                media_type="text/html",
+                status_code=400,
+            )
 
     # 1. KIỂM TRA TRẠNG THÁI HỆ THỐNG HIỆN TẠI (CHỈ KHI XEM LIVE)
     if is_latest:
@@ -29,10 +38,9 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
         if state_res.rows:
             current_status = str(state_res.rows[0][0])
 
-    # 2. XÁC ĐỊNH DỮ LIỆU CẦN VẼ (SỬ DỤNG CƠ CHẾ SẮP XẾP THEO ID ĐỂ TRANH LỆCH NGÀY) [1]
+    # 2. XÁC ĐỊNH DỮ LIỆU CẦN VẼ
     if is_latest:
         if current_status == "critical":
-            # ĐANG CHÁY: Vẽ diễn biến sự cố Active thời gian thực
             id_q = (
                 "SELECT incident_id FROM incidents "
                 "WHERE end_time = 'Active' "
@@ -43,7 +51,7 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
                 target_id = int(cast(int, id_res.rows[0][0]))
                 q = (
                     "SELECT temp, smoke, timestamp FROM burning_logs "
-                    "WHERE incident_id = ? ORDER BY id ASC"  # Sắp xếp theo khóa chính tự tăng
+                    "WHERE incident_id = ? ORDER BY id ASC"
                 )
                 res = await database.db.execute(q, [target_id])
             else:
@@ -51,25 +59,22 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
                     "SELECT temp, smoke, timestamp FROM ("
                     "  SELECT temp, smoke, timestamp FROM burning_logs "
                     "  ORDER BY id DESC LIMIT 30"
-                    ") ORDER BY id ASC"  # Sắp xếp theo khóa chính tự tăng
+                    ") ORDER BY id ASC"
                 )
         else:
-            # ĐANG AN TOÀN: Vẽ biểu đồ thời gian thực (incident_id = 0)
             target_id = 0
             q = (
                 "SELECT temp, smoke, timestamp FROM ("
                 "  SELECT temp, smoke, timestamp FROM burning_logs "
                 "  WHERE incident_id = 0 "
                 "  ORDER BY id DESC LIMIT 30"
-                ") ORDER BY id ASC"  # Sắp xếp theo khóa chính tự tăng
+                ") ORDER BY id ASC"
             )
             res = await database.db.execute(q)
     else:
-        # XEM LỊCH SỬ TĨNH: Vẽ sự cố cụ thể đã chọn
-        target_id = int(incident_id)
         q = (
             "SELECT temp, smoke, timestamp FROM burning_logs "
-            "WHERE incident_id = ? ORDER BY id ASC"  # Sắp xếp theo khóa chính tự tăng
+            "WHERE incident_id = ? ORDER BY id ASC"
         )
         res = await database.db.execute(q, [target_id])
 
@@ -79,7 +84,7 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
         if id_res.rows:
             is_active = str(id_res.rows[0][0]) == "Active"
 
-    # 3. ÉP KIỂU VÀ CHUẨN HÓA DỮ LIỆU (Type Safety cho Basedpyright)
+    # 3. ÉP KIỂU VÀ CHUẨN HÓA DỮ LIỆU
     points_t: list[float] = []
     points_s: list[float] = []
     times: list[str] = []
@@ -118,17 +123,16 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
         )
         return Response(content=err_div, media_type="text/html")
 
-    # 4. THIẾT LẬP THÔNG SỐ TOẠ ĐỘ VÀ PADDING (2 BÊN TRỤC Y)
+    # 4. THIẾT LẬP THÔNG SỐ TOẠ ĐỘ VÀ PADDING
     w, h = 800, 200
-    p_left, p_right, p_top, p_bottom = 60, 60, 20, 30  # Chừa 60px cho 2 bên Y-axis
+    p_left, p_right, p_top, p_bottom = 60, 60, 20, 30
     chart_w = w - p_left - p_right
     chart_h = h - p_top - p_bottom
     y_min = h - p_bottom
 
-    # --- TOÁN HỌC TRỤC TRÁI (NHIỆT ĐỘ - ĐƯỜNG) ---
+    # --- TOÁN HỌC TRỤC TRÁI (NHIỆT ĐỘ) ---
     min_t, max_t = min(points_t), max(points_t)
 
-    # Phóng to chủ động
     MIN_SPAN = 2.0 if zoom == "detail" else 40.0
     current_span = max_t - min_t
     if current_span < MIN_SPAN:
@@ -137,12 +141,12 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
         max_t = min_t + MIN_SPAN
     span_t = max_t - min_t
 
-    # --- TOÁN HỌC TRỤC PHẢI (KHÓI - CỘT) ---
+    # --- TOÁN HỌC TRỤC PHẢI (KHÓI) ---
     max_s = max(points_s) if points_s else 300.0
     smoke_ceiling = max(400.0, float(max_s))
     span_s = smoke_ceiling
 
-    # Tính toán tọa độ của đường trendline Nhiệt độ
+    # Tính toán tọa độ đường trendline Nhiệt độ
     coords_t: list[str] = []
     num_pts = len(points_t)
     for i, v in enumerate(points_t):
@@ -154,7 +158,7 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
     x_last = p_left + chart_w if num_pts > 1 else p_left
 
     # 5. KHỞI TẠO TỌA ĐỘ CHO 3 ĐIỂM DỮ LIỆU CHÍNH
-    mid_idx = num_pts // 2
+    # FIX: Xoá biến mid_idx không dùng đến
     t_start = points_t[0]
     time_start = times[0]
     y_start_t = y_min - ((t_start - min_t) / span_t * chart_h)
@@ -184,12 +188,11 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
         columns_list.append(rect)
     columns_svg = "".join(columns_list)
 
-    # 7. KHAI BÁO HẰNG SỐ MÀU SẮC ĐỒ HỌA
+    # 7. KHAI BÁO HẰNG SỐ MÀU SẮC
     axis_color = "#455a64"
     text_color = "#9e9e9e"
     grid_color = "rgba(255, 255, 255, 0.22)"
 
-    # ĐƯỜNG DÓNG ĐỨT NÉT CHỈ ĐIỂM (PROJECTION LINES - TOÀN CHIỀU CAO/CHIỀU RỘNG)
     proj_lines = (
         f'<line x1="{p_left}" y1="{y_peak_t}" x2="{w - p_right}" y2="{y_peak_t}" stroke="{grid_color}" stroke-dasharray="4" />'
         f'<line x1="{x_peak}" y1="{y_min}" x2="{x_peak}" y2="{p_top}" stroke="{grid_color}" stroke-dasharray="4" />'
@@ -197,14 +200,12 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
         f'<line x1="{x_last}" y1="{y_min}" x2="{x_last}" y2="{p_top}" stroke="{grid_color}" stroke-dasharray="4" />'
     )
 
-    # Trục chính kép
     axes = (
         f'<line x1="{p_left}" y1="{p_top}" x2="{p_left}" y2="{y_min}" stroke="{axis_color}" stroke-width="1.2" />'
         f'<line x1="{w - p_right}" y1="{p_top}" x2="{w - p_right}" y2="{y_min}" stroke="{axis_color}" stroke-width="1.2" />'
         f'<line x1="{p_left}" y1="{y_min}" x2="{w - p_right}" y2="{y_min}" stroke="{axis_color}" stroke-width="1.2" />'
     )
 
-    # NHÂN TRỤC Y TRÁI (NHIỆT ĐỘ - MÀU ĐỎ CAM)
     MIN_LABEL_GAP = 20.0
     y_labels_temp_list = [
         f'<text x="{p_left - 10}" y="{y_start_t + 4}" text-anchor="end" fill="#ff5722" font-size="11">{t_start:.1f}°C</text>'
@@ -222,15 +223,14 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
         )
     y_labels_temp = "".join(y_labels_temp_list)
 
-    # NHÃN TRỤC Y PHẢI (KHÓI - MÀU XANH LAM)
+    # FIX: Đổi nhãn "PPM" thành "ADC" cho đúng với output thực của MQ-2
     y_mid = p_top + chart_h / 2.0
     y_labels_smoke = (
-        f'<text x="{w - p_right + 10}" y="{p_top + 4}" text-anchor="start" fill="#2196f3" font-size="11">{smoke_ceiling:.0f} PPM</text>'
-        f'<text x="{w - p_right + 10}" y="{y_mid + 4}" text-anchor="start" fill="#2196f3" font-size="11">{(smoke_ceiling / 2):.0f} PPM</text>'
-        f'<text x="{w - p_right + 10}" y="{y_min + 4}" text-anchor="start" fill="#2196f3" font-size="11">0 PPM</text>'
+        f'<text x="{w - p_right + 10}" y="{p_top + 4}" text-anchor="start" fill="#2196f3" font-size="11">{smoke_ceiling:.0f} ADC</text>'
+        f'<text x="{w - p_right + 10}" y="{y_mid + 4}" text-anchor="start" fill="#2196f3" font-size="11">{(smoke_ceiling / 2):.0f} ADC</text>'
+        f'<text x="{w - p_right + 10}" y="{y_min + 4}" text-anchor="start" fill="#2196f3" font-size="11">0 ADC</text>'
     )
 
-    # NHÃN TRỤC X (THỜI GIAN)
     x_labels_list = [
         f'<text x="{p_left}" y="{h - 10}" text-anchor="start" fill="{text_color}" font-size="11">{time_start}</text>'
     ]
@@ -250,7 +250,7 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
         f'<circle cx="{x_last}" cy="{y_end_t}" r="2.5" fill="#ff3d00" />'
     )
 
-    # 8. DỰNG HÌNH VECTOR TRƠN (SVG) - Cột khói lót dưới, sau đó tới mảng màu và trendline đỏ
+    # 8. DỰNG HÌNH VECTOR SVG
     svg_path = (
         f'<path d="M {p_left},{y_min} L {points_str_t} L {x_last},{y_min} Z" '
         'fill="rgba(255,61,0,0.08)"/>'
@@ -266,7 +266,7 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
         f"{axes}{columns_svg}{svg_path}{proj_lines}{y_labels_temp}{y_labels_smoke}{x_labels}{svg_line}{data_nodes}</svg>"
     )
 
-    # 9. THANH ĐIỀU HƯỚNG ZOOM ĐỘNG
+    # 9. THANH ĐIỀU HƯỚNG ZOOM
     class_flat = "primary" if zoom == "flat" else "outline"
     class_detail = "primary" if zoom == "detail" else "outline"
     zoom_bar = (
@@ -276,7 +276,7 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
         f"</div>"
     )
 
-    # 10. TRẢ VỀ TRẠNG THÁI KIỂM SOÁT TRIGGER QUA HTML (HATEOAS)
+    # 10. TRẢ VỀ HTML
     if is_latest:
         wrapper = (
             f'<div class="graph-wrapper margin" '

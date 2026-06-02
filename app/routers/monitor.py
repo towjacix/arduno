@@ -7,8 +7,6 @@ import app.database as database
 from app.config import CONFIG
 from app.schemas import MonitorPayload
 
-
-# Khai báo chính thức cho Basedpyright nhận diện thuộc tính công khai
 __all__ = ["router"]
 
 router = APIRouter()
@@ -56,15 +54,30 @@ async def monitor_system(data: MonitorPayload):
     threshold = await get_dynamic_threshold()
     smoke_limit = int(CONFIG.get_nested("threshold", "default", "smoke", default=300))
 
-    new_status = (
-        "critical" if data.temp > threshold or data.smoke > smoke_limit else "safe"
-    )
+    # FIX: Áp dụng Hysteresis để tránh dao động trạng thái khi nhiệt độ ở sát ngưỡng.
+    # Vào "critical": khi VƯỢT ngưỡng.
+    # Ra "safe": chỉ khi THẤP HƠN (ngưỡng - hysteresis) — tránh flicker.
+    hysteresis = int(CONFIG.get_nested("hysteresis", default=2))
+    if old_status == "safe":
+        new_status = (
+            "critical"
+            if data.temp > threshold or data.smoke > smoke_limit
+            else "safe"
+        )
+    else:
+        new_status = (
+            "safe"
+            if data.temp <= (threshold - hysteresis) and data.smoke <= smoke_limit
+            else "critical"
+        )
 
-    active_inc_id = 0
+    # ID sự cố active — sẽ được cập nhật bên dưới nếu đang ở trạng thái critical
+    active_inc_id: int = 0
 
     # LOGIC XỬ LÝ SỰ CỐ & CẬP NHẬT PEAK TEMP LIÊN TỤC
     if new_status == "critical":
         if old_status == "safe":
+            # Tạo sự cố mới khi bắt đầu chuyển sang critical
             await database.db.execute(
                 "INSERT INTO incidents (start_time, end_time, peak_temp) VALUES (?, 'Active', ?)",
                 [now, data.temp],
@@ -77,13 +90,17 @@ async def monitor_system(data: MonitorPayload):
             raw_inc_id = inc_res.rows[0][0]
             raw_peak = inc_res.rows[0][1]
 
+            # FIX: Gán active_inc_id từ dữ liệu thực tế, không giữ nguyên 0
             inc_id = int(raw_inc_id) if isinstance(raw_inc_id, int) else 0
+            active_inc_id = inc_id
+
             old_peak = float(raw_peak) if isinstance(raw_peak, (int, float)) else 0.0
 
             if data.temp > old_peak:
+                # FIX: Dùng inc_id (đã resolve) thay vì active_inc_id = 0
                 await database.db.execute(
                     "UPDATE incidents SET peak_temp = ? WHERE incident_id = ?",
-                    [data.temp, active_inc_id],
+                    [data.temp, inc_id],
                 )
 
     elif old_status == "critical" and new_status == "safe":
@@ -91,7 +108,7 @@ async def monitor_system(data: MonitorPayload):
             "UPDATE incidents SET end_time = ? WHERE end_time = 'Active'", [now]
         )
 
-    # Ghi log liên tục vào burning_logs để duy trì cửa sổ trượt
+    # Ghi log liên tục vào burning_logs — FIX: dùng active_inc_id đã được cập nhật đúng
     await database.db.execute(
         "INSERT INTO burning_logs (incident_id, timestamp, temp, smoke) VALUES (?, ?, ?, ?)",
         [active_inc_id, now, data.temp, data.smoke],
@@ -121,7 +138,6 @@ async def get_status_html():
     r = res.rows[0]
     raw_status, raw_temp, raw_smoke, raw_thresh, raw_ts = r[0], r[1], r[2], r[3], r[4]
 
-    # Khối lệnh rẽ nhánh an toàn để ép kiểu
     status = str(raw_status) if raw_status is not None else "safe"
     ts = str(raw_ts) if raw_ts is not None else ""
 
@@ -137,16 +153,13 @@ async def get_status_html():
     if isinstance(raw_thresh, int):
         thresh = int(raw_thresh)
 
-    # Áp dụng màu đỏ cảnh báo của Beer CSS ("error") trực tiếp lên thẻ <article> để hiển thị chữ trắng [1]
     status_class = "error" if status == "critical" else ""
     icon_class = "" if status == "critical" else "blue-text"
     status_icon = "warning" if status == "critical" else "check_circle"
 
-    # [NÂNG CẤP] Ép chiều cao min-height: 105px đồng bộ cho cả 3 hộp để mười phân vẹn mười [7]
     return HTMLResponse(
         content=f"""
     <div class="grid" id="status-grid" hx-get="/api/status" hx-trigger="every 2s" hx-swap="outerHTML">
-        <!-- Thẻ 1: Nhiệt độ -->
         <div class="s12 m4">
             <article class="border round padding" style="margin: 0; min-height: 105px; height: 100%;">
                 <div class="row">
@@ -159,20 +172,19 @@ async def get_status_html():
             </article>
         </div>
 
-        <!-- Thẻ 2: Mật độ khói -->
         <div class="s12 m4">
             <article class="border round padding" style="margin: 0; min-height: 105px; height: 100%;">
                 <div class="row">
                     <i class="grey-text">cloud</i>
                     <div class="max">
                         <h6>Mật độ khói</h6>
-                        <h4>{smoke} PPM</h4>
+                        <!-- FIX: Đổi nhãn từ PPM (sai) sang ADC (đúng với MQ-2 raw output) -->
+                        <h4>{smoke} ADC</h4>
                     </div>
                 </div>
             </article>
         </div>
 
-        <!-- Thẻ 3: Ngưỡng tự động kiêm Trạng thái (Đồng bộ 2 dòng tiêu đề cực kỳ cân đối) [7] -->
         <div class="s12 m4">
             <article class="border round padding {status_class}" style="margin: 0; min-height: 105px; height: 100%;">
                 <div class="row">
@@ -198,9 +210,12 @@ async def get_history_html(page: int = 1):
     page = max(1, page)
     PAGE_SIZE = 5
 
-    # 1. Truy vấn TOÀN BỘ dữ liệu sự cố (Sắp xếp lớn nhất lên đầu)
-    # Bỏ qua hoàn toàn cơ chế phân trang của SQL để tránh lỗi Driver LibSQL [9]
-    query = "SELECT incident_id, start_time, end_time, peak_temp FROM incidents ORDER BY incident_id DESC"
+    # Truy vấn với LIMIT bảo vệ để tránh quét toàn bảng khi dữ liệu lớn
+    MAX_ROWS = 500
+    query = (
+        f"SELECT incident_id, start_time, end_time, peak_temp "
+        f"FROM incidents ORDER BY incident_id DESC LIMIT {MAX_ROWS}"
+    )
     res = await database.db.execute(query)
 
     total_items = len(res.rows)
@@ -208,15 +223,12 @@ async def get_history_html(page: int = 1):
     page = min(page, total_pages)
 
     offset = (page - 1) * PAGE_SIZE
-
-    # 2. Thực hiện Phân trang (Slicing) trực tiếp trên RAM của Python - Không thể lỗi!
     paginated_rows = res.rows[offset : offset + PAGE_SIZE]
 
     rows = []
     for r in paginated_rows:
         inc_id_raw, start_time_raw, end_time_raw, peak_temp_raw = r[0], r[1], r[2], r[3]
 
-        # Ép kiểu tuyệt đối an toàn
         inc_id = int(inc_id_raw) if isinstance(inc_id_raw, int) else 0
         start_time = str(start_time_raw) if start_time_raw is not None else ""
         dest_time = str(end_time_raw) if end_time_raw is not None else ""
@@ -245,7 +257,6 @@ async def get_history_html(page: int = 1):
         else "<tr><td colspan='5' class='center-align'>Chưa có nhật ký</td></tr>"
     )
 
-    # Khối <tbody> tự động Polling đúng trang hiện tại
     tbody_html = (
         f'<tbody id="history-body" hx-get="/api/history?page={page}" '
         f'hx-trigger="every 10s" hx-swap="outerHTML">'
@@ -253,7 +264,6 @@ async def get_history_html(page: int = 1):
         f"</tbody>"
     )
 
-    # 3. DỰNG CỤM NÚT SỐ PHÂN TRANG ĐỘNG (Dùng HTMX OOB Swap)
     pag_buttons = []
     if page > 1:
         pag_buttons.append(
@@ -271,7 +281,6 @@ async def get_history_html(page: int = 1):
             f'<button class="chip outline" hx-get="/api/history?page={page + 1}" hx-target="#history-body" hx-swap="outerHTML"><i>chevron_right</i></button>'
         )
 
-    # Thẻ div này chứa hx-swap-oob="true" sẽ tự động bắn ra ngoài bảng để cập nhật cụm nút phân trang
     pag_html = (
         f'<div id="history-pagination" hx-swap-oob="true" '
         f'class="row center-align padding" style="justify-content: center; gap: 6px;">'

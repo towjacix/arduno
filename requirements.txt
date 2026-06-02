@@ -3,5 +3,5 @@ jinja2
 fastapi
 uvicorn
 requests
-toml
 libsql-client
+# toml đã xoá — code dùng tomllib từ stdlib (Python 3.11+), không cần package ngoài
