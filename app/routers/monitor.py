@@ -22,7 +22,6 @@ async def get_dynamic_threshold() -> int:
     window = int(CONFIG["window_size"])
     offset = int(CONFIG["temp_offset"])
 
-    # Thêm dấu đóng ngoặc đơn ")" ở dòng cuối để khép lại truy vấn con SQLite
     query = (
         "SELECT AVG(temp) FROM ("
         "SELECT temp FROM burning_logs "
@@ -122,7 +121,7 @@ async def get_status_html():
     r = res.rows[0]
     raw_status, raw_temp, raw_smoke, raw_thresh, raw_ts = r[0], r[1], r[2], r[3], r[4]
 
-    # Khối lệnh rẽ nhánh an toàn để ép kiểu (Không dùng ternary một dòng)
+    # Khối lệnh rẽ nhánh an toàn để ép kiểu
     status = str(raw_status) if raw_status is not None else "safe"
     ts = str(raw_ts) if raw_ts is not None else ""
 
@@ -143,13 +142,13 @@ async def get_status_html():
     icon_class = "" if status == "critical" else "blue-text"
     status_icon = "warning" if status == "critical" else "check_circle"
 
-    # Trả về toàn bộ thẻ cha mang thuộc tính hx-trigger="every 2s"
+    # Gộp toàn bộ 3 thẻ chỉ số nhanh thành một cấu trúc Grid đồng bộ tuyệt đối chiều cao (min-height: 105px) [7]
     return HTMLResponse(
         content=f"""
     <div class="grid" id="status-grid" hx-get="/api/status" hx-trigger="every 2s" hx-swap="outerHTML">
         <!-- Thẻ 1: Nhiệt độ -->
         <div class="s12 m4">
-            <article class="border round padding" style="margin: 0;">
+            <article class="border round padding" style="margin: 0; min-height: 105px; height: 100%;">
                 <div class="row">
                     <i class="orange-text">thermostat</i>
                     <div class="max">
@@ -162,7 +161,7 @@ async def get_status_html():
 
         <!-- Thẻ 2: Mật độ khói -->
         <div class="s12 m4">
-            <article class="border round padding" style="margin: 0;">
+            <article class="border round padding" style="margin: 0; min-height: 105px; height: 100%;">
                 <div class="row">
                     <i class="grey-text">cloud</i>
                     <div class="max">
@@ -173,13 +172,13 @@ async def get_status_html():
             </article>
         </div>
 
-        <!-- Thẻ 3: Ngưỡng tự động kiêm Trạng thái -->
+        <!-- Thẻ 3: Ngưỡng tự động kiêm Trạng thái (Đồng bộ 2 dòng tiêu đề cực kỳ cân đối) [7] -->
         <div class="s12 m4">
-            <article class="border round padding {status_class}" style="margin: 0;">
+            <article class="border round padding {status_class}" style="margin: 0; min-height: 105px; height: 100%;">
                 <div class="row">
                     <i class="{icon_class}">{status_icon}</i>
                     <div class="max">
-                        <h6>Ngưỡng (Hệ thống: {status.upper()})</h6>
+                        <h6>Hệ thống: {status.upper()}</h6>
                         <h4>{thresh}°C</h4>
                     </div>
                 </div>
@@ -222,6 +221,7 @@ async def get_history_html(page: int = 1):
     for r in res.rows:
         inc_id_raw, start_time_raw, end_time_raw, peak_temp_raw = r[0], r[1], r[2], r[3]
 
+        # Viết khối lệnh rẽ nhánh an toàn để ép kiểu tuyệt đối
         inc_id = int(inc_id_raw) if isinstance(inc_id_raw, int) else 0
         start_time = str(start_time_raw) if start_time_raw is not None else ""
         dest_time = str(end_time_raw) if end_time_raw is not None else ""
