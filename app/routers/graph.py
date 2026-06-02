@@ -1,3 +1,5 @@
+from typing import cast
+
 from fastapi import APIRouter, Response
 
 import app.database as database
@@ -11,24 +13,58 @@ async def get_incident_graph(incident_id: str):
     if database.db is None:
         return Response(content="Database Error", status_code=500)
 
+    # KHAI BÁO MẶC ĐỊNH TRÊN ĐẦU HÀM ĐỂ TRÁNH LỖI PHẠM VI BIẾN (reportUndefinedVariable)
     target_id: int = 0
     is_latest = incident_id == "latest"
-    is_active = False
+    current_status = "safe"
+    is_active: bool = False
 
-    # 1. PHÂN LUỒNG TRUY VẤN LOGIC (REAL-TIME AMBIENT VS INCIDENTS)
+    # 1. KIỂM TRA TRẠNG THÁI HỆ THỐNG HIỆN TẠI (CHỈ KHI XEM LIVE)
     if is_latest:
-        # Chế độ LIVE Ambient: Luôn vẽ nhiệt độ phòng thời gian thực (incident_id = 0)
-        target_id = 0
-        q = (
-            "SELECT temp, timestamp FROM ("
-            "  SELECT temp, timestamp FROM burning_logs "
-            "  WHERE incident_id = 0 "
-            "  ORDER BY id DESC LIMIT 30"
-            ") ORDER BY timestamp ASC"
+        state_res = await database.db.execute(
+            "SELECT status FROM system_state WHERE id = 1"
         )
-        res = await database.db.execute(q)
+        if state_res.rows:
+            current_status = str(state_res.rows[0][0])
+
+    # 2. XÁC ĐỊNH DỮ LIỆU CẦN VẼ (REAL-TIME AMBIENT VS INCIDENTS)
+    if is_latest:
+        if current_status == "critical":
+            # ĐANG CHÁY: Vẽ diễn biến sự cố Active thời gian thực
+            id_q = (
+                "SELECT incident_id FROM incidents "
+                "WHERE end_time = 'Active' "
+                "ORDER BY incident_id DESC LIMIT 1"
+            )
+            id_res = await database.db.execute(id_q)
+            if id_res.rows:
+                target_id = int(cast(int, id_res.rows[0][0]))
+                q = (
+                    "SELECT temp, timestamp FROM burning_logs "
+                    "WHERE incident_id = ? ORDER BY timestamp ASC"
+                )
+                res = await database.db.execute(q, [target_id])
+            else:
+                # Fallback nếu rỗng
+                res = await database.db.execute(
+                    "SELECT temp, timestamp FROM ("
+                    "  SELECT temp, timestamp FROM burning_logs "
+                    "  ORDER BY id DESC LIMIT 30"
+                    ") ORDER BY timestamp ASC"
+                )
+        else:
+            # ĐANG AN TOÀN: Vẽ biểu đồ giám sát môi trường phòng Lab thời gian thực (incident_id = 0)
+            target_id = 0
+            q = (
+                "SELECT temp, timestamp FROM ("
+                "  SELECT temp, timestamp FROM burning_logs "
+                "  WHERE incident_id = 0 "
+                "  ORDER BY id DESC LIMIT 30"
+                ") ORDER BY timestamp ASC"
+            )
+            res = await database.db.execute(q)
     else:
-        # Chế độ xem sự cố cụ thể (Lịch sử hoặc Đang diễn ra)
+        # XEM LỊCH SỬ TĨNH: Vẽ sự cố cụ thể đã chọn, không quan tâm trạng thái hiện tại
         target_id = int(incident_id)
         q = (
             "SELECT temp, timestamp FROM burning_logs "
@@ -43,7 +79,7 @@ async def get_incident_graph(incident_id: str):
         if id_res.rows:
             is_active = str(id_res.rows[0][0]) == "Active"
 
-    # 2. ÉP KIỂU VÀ CHUẨN HÓA DỮ LIỆU (Type Safety cho Basedpyright)
+    # 3. ÉP KIỂU VÀ CHUẨN HÓA DỮ LIỆU (Type Safety cho Basedpyright)
     points: list[float] = []
     times: list[str] = []
 
@@ -67,7 +103,6 @@ async def get_incident_graph(incident_id: str):
                 "<i>sensors</i> Trở về Giám Sát Phòng (Ambient)</button></div>"
             )
 
-        # Định nghĩa htmx_attrs an toàn cho Vỏ bọc lỗi
         if is_latest:
             htmx_attrs = 'hx-get="/api/analytics/graph/latest" hx-trigger="every 5s" hx-swap="outerHTML"'
         elif is_active:
@@ -80,7 +115,7 @@ async def get_incident_graph(incident_id: str):
         )
         return Response(content=err_div, media_type="text/html")
 
-    # 3. THIẾT LẬP THÔNG SỐ TOẠ ĐỘ VÀ PADDING (VÙNG AN TOÀN CHO TRỤC)
+    # 4. THIẾT LẬP THÔNG SỐ TOẠ ĐỘ VÀ PADDING (VÙNG AN TOÀN CHO TRỤC)
     w, h = 800, 200
     p_left, p_right, p_top, p_bottom = 60, 20, 20, 30
     chart_w = w - p_left - p_right
@@ -109,14 +144,7 @@ async def get_incident_graph(incident_id: str):
     points_str = " ".join(coords)
     x_last = p_left + chart_w if num_pts > 1 else p_left
 
-    # 4. THIẾT KẾ GRIDLINES VÀ NHÃN TRỤC Y (NHIỆT ĐỘ)
-    axis_color = "#455a64"
-    text_color = "#9e9e9e"
-    grid_color = "rgba(255, 255, 255, 0.22)"
-
-    y_max, y_min = p_top, h - p_bottom
-
-    # Khởi tạo tọa độ cho 3 điểm dữ liệu chính
+    # 5. KHỞI TẠO TỌA ĐỘ CHO 3 ĐIỂM DỮ LIỆU CHÍNH
     mid_idx = num_pts // 2
     t_start = points[0]
     time_start = times[0]
@@ -131,23 +159,67 @@ async def get_incident_graph(incident_id: str):
     time_end = times[-1]
     y_end = (h - p_bottom) - ((t_end - min_t) / span * chart_h)
 
-    # ĐƯỜNG DÓNG ĐỨT NÉT CHỈ ĐIỂM (PROJECTION LINES)
-    proj_lines = (
-        f'<line x1="{p_left}" y1="{y_mid}" x2="{x_mid}" y2="{y_mid}" stroke="{grid_color}" stroke-dasharray="4" />'
+    # 6. THUẬT TOÁN CHỐNG ĐÈ CHỮ THÔNG MINH (LABEL DE-CLUTTERING)
+    axis_color = "#455a64"
+    text_color = "#9e9e9e"
+    grid_color = "rgba(255, 255, 255, 0.22)"
+    y_min = h - p_bottom
+
+    MIN_LABEL_GAP = 20.0
+
+    y_labels_list = []
+    proj_lines_list = []
+    data_nodes_list = []
+
+    # Điểm 1 (Bắt đầu): Luôn vẽ nhãn Y và chấm đỏ
+    y_labels_list.append(
+        f'<text x="{p_left - 10}" y="{y_start + 4}" text-anchor="end" fill="{text_color}" font-size="11">{t_start:.1f}°C</text>'
+    )
+    data_nodes_list.append(
+        f'<circle cx="{p_left}" cy="{y_start}" r="3" fill="#ff3d00" />'
+    )
+
+    # Điểm 2 (Giữa): Kiểm tra khoảng cách đè chữ
+    if abs(y_mid - y_start) >= MIN_LABEL_GAP:
+        y_labels_list.append(
+            f'<text x="{p_left - 10}" y="{y_mid + 4}" text-anchor="end" fill="{text_color}" font-size="11">{t_mid:.1f}°C</text>'
+        )
+        proj_lines_list.append(
+            f'<line x1="{p_left}" y1="{y_mid}" x2="{x_mid}" y2="{y_mid}" stroke="{grid_color}" stroke-dasharray="4" />'
+        )
+
+    # Luôn dóng dọc mốc thời gian dưới trục X
+    proj_lines_list.append(
         f'<line x1="{x_mid}" y1="{y_min}" x2="{x_mid}" y2="{y_mid}" stroke="{grid_color}" stroke-dasharray="4" />'
-        f'<line x1="{p_left}" y1="{y_end}" x2="{x_last}" y2="{y_end}" stroke="{grid_color}" stroke-dasharray="4" />'
+    )
+    data_nodes_list.append(
+        f'<circle cx="{x_mid}" cy="{y_mid}" r="2.5" fill="#ff3d00" />'
+    )
+
+    # Điểm 3 (Kết thúc): Kiểm tra khoảng cách đè chữ
+    if abs(y_end - y_start) >= MIN_LABEL_GAP and abs(y_end - y_mid) >= MIN_LABEL_GAP:
+        y_labels_list.append(
+            f'<text x="{p_left - 10}" y="{y_end + 4}" text-anchor="end" fill="{text_color}" font-size="11">{t_end:.1f}°C</text>'
+        )
+        proj_lines_list.append(
+            f'<line x1="{p_left}" y1="{y_end}" x2="{x_last}" y2="{y_end}" stroke="{grid_color}" stroke-dasharray="4" />'
+        )
+
+    proj_lines_list.append(
         f'<line x1="{x_last}" y1="{y_min}" x2="{x_last}" y2="{y_end}" stroke="{grid_color}" stroke-dasharray="4" />'
     )
+    data_nodes_list.append(
+        f'<circle cx="{x_last}" cy="{y_end}" r="2.5" fill="#ff3d00" />'
+    )
+
+    # Gộp chuỗi SVG thành phần
+    y_labels = "".join(y_labels_list)
+    proj_lines = "".join(proj_lines_list)
+    data_nodes = "".join(data_nodes_list)
 
     axes = (
         f'<line x1="{p_left}" y1="{p_top}" x2="{p_left}" y2="{y_min}" stroke="{axis_color}" stroke-width="1.2" />'
         f'<line x1="{p_left}" y1="{y_min}" x2="{w - p_right}" y2="{y_min}" stroke="{axis_color}" stroke-width="1.2" />'
-    )
-
-    y_labels = (
-        f'<text x="{p_left - 10}" y="{y_start + 4}" text-anchor="end" fill="{text_color}" font-size="11">{t_start:.1f}°C</text>'
-        f'<text x="{p_left - 10}" y="{y_mid + 4}" text-anchor="end" fill="{text_color}" font-size="11">{t_mid:.1f}°C</text>'
-        f'<text x="{p_left - 10}" y="{y_end + 4}" text-anchor="end" fill="{text_color}" font-size="11">{t_end:.1f}°C</text>'
     )
 
     x_labels = (
@@ -156,13 +228,7 @@ async def get_incident_graph(incident_id: str):
         f'<text x="{x_last}" y="{h - 10}" text-anchor="end" fill="{text_color}" font-size="11">{time_end}</text>'
     )
 
-    data_nodes = (
-        f'<circle cx="{p_left}" cy="{y_start}" r="3" fill="#ff3d00" />'
-        f'<circle cx="{x_mid}" cy="{y_mid}" r="3" fill="#ff3d00" />'
-        f'<circle cx="{x_last}" cy="{y_end}" r="3" fill="#ff3d00" />'
-    )
-
-    # DỰNG HÌNH VECTOR (SVG)
+    # 7. DỰNG HÌNH VECTOR (SVG)
     svg_path = (
         f'<path d="M {p_left},{y_min} L {points_str} L {x_last},{y_min} Z" '
         'fill="rgba(255,61,0,0.1)"/>'
