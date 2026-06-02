@@ -1,4 +1,7 @@
+-i https://pypi.org/simple
 jinja2
 fastapi
 uvicorn
 requests
+toml
+libsql-client
