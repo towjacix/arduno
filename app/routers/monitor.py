@@ -7,6 +7,7 @@ import app.database as database
 from app.config import CONFIG
 from app.schemas import MonitorPayload
 
+
 __all__ = ["router"]
 
 router = APIRouter()
@@ -60,9 +61,7 @@ async def monitor_system(data: MonitorPayload):
     hysteresis = int(CONFIG.get_nested("hysteresis", default=2))
     if old_status == "safe":
         new_status = (
-            "critical"
-            if data.temp > threshold or data.smoke > smoke_limit
-            else "safe"
+            "critical" if data.temp > threshold or data.smoke > smoke_limit else "safe"
         )
     else:
         new_status = (
@@ -202,54 +201,42 @@ async def get_status_html():
 
 
 @router.get("/api/history", response_class=HTMLResponse)
-async def get_history_html(page: int = 1):
-    """Lấy lịch sử cảnh báo phân trang bóc tách trực tiếp trên RAM Python."""
+async def get_history_html():
+    """Lấy toàn bộ lịch sử cảnh báo, trả về dạng scrollable tbody đơn giản."""
     if database.db is None:
-        return HTMLResponse("")
+        return HTMLResponse(
+            '<tbody id="history-body"><tr><td colspan="5" class="center-align">Offline</td></tr></tbody>'
+        )
 
-    page = max(1, page)
-    PAGE_SIZE = 5
-
-    # Truy vấn với LIMIT bảo vệ để tránh quét toàn bảng khi dữ liệu lớn
-    MAX_ROWS = 500
-    query = (
+    MAX_ROWS = 100
+    res = await database.db.execute(
         f"SELECT incident_id, start_time, end_time, peak_temp "
         f"FROM incidents ORDER BY incident_id DESC LIMIT {MAX_ROWS}"
     )
-    res = await database.db.execute(query)
-
-    total_items = len(res.rows)
-    total_pages = max(1, (total_items + PAGE_SIZE - 1) // PAGE_SIZE)
-    page = min(page, total_pages)
-
-    offset = (page - 1) * PAGE_SIZE
-    paginated_rows = res.rows[offset : offset + PAGE_SIZE]
 
     rows = []
-    for r in paginated_rows:
+    for r in res.rows:
         inc_id_raw, start_time_raw, end_time_raw, peak_temp_raw = r[0], r[1], r[2], r[3]
 
         inc_id = int(inc_id_raw) if isinstance(inc_id_raw, int) else 0
         start_time = str(start_time_raw) if start_time_raw is not None else ""
-        dest_time = str(end_time_raw) if end_time_raw is not None else ""
+        end_time = str(end_time_raw) if end_time_raw is not None else ""
 
         peak_temp = 0.0
         if isinstance(peak_temp_raw, (int, float)):
             peak_temp = float(peak_temp_raw)
 
-        btn_class = "error" if dest_time == "Active" else "outline"
-        btn_label = "LIVE" if dest_time == "Active" else "DONE"
+        btn_class = "error" if end_time == "Active" else "outline"
+        btn_label = "LIVE" if end_time == "Active" else "DONE"
 
-        row = (
-            f"<tr style='cursor: pointer;' "
+        rows.append(
+            f"<tr style='cursor:pointer;' "
             f"hx-get='/api/analytics/graph/{inc_id}' "
-            f"hx-target='.graph-wrapper' "
-            f"hx-swap='outerHTML'>"
-            f"<td>#{inc_id}</td><td>{start_time}</td><td>{dest_time}</td>"
-            f"<td>{peak_temp}°C</td><td>"
-            f"<button class='chip {btn_class}'>{btn_label}</button></td></tr>"
+            f"hx-target='.graph-wrapper' hx-swap='outerHTML'>"
+            f"<td>#{inc_id}</td><td>{start_time}</td><td>{end_time}</td>"
+            f"<td>{peak_temp:.1f}°C</td>"
+            f"<td><button class='chip {btn_class}'>{btn_label}</button></td></tr>"
         )
-        rows.append(row)
 
     tbody_content = (
         "".join(rows)
@@ -257,35 +244,9 @@ async def get_history_html(page: int = 1):
         else "<tr><td colspan='5' class='center-align'>Chưa có nhật ký</td></tr>"
     )
 
-    tbody_html = (
-        f'<tbody id="history-body" hx-get="/api/history?page={page}" '
-        f'hx-trigger="every 10s" hx-swap="outerHTML">'
+    return HTMLResponse(
+        f'<tbody id="history-body" '
+        f'hx-get="/api/history" hx-trigger="every 10s" hx-swap="outerHTML">'
         f"{tbody_content}"
         f"</tbody>"
     )
-
-    pag_buttons = []
-    if page > 1:
-        pag_buttons.append(
-            f'<button class="chip outline" hx-get="/api/history?page={page - 1}" hx-target="#history-body" hx-swap="outerHTML"><i>chevron_left</i></button>'
-        )
-
-    for p in range(1, total_pages + 1):
-        btn_class = "primary" if p == page else "outline"
-        pag_buttons.append(
-            f'<button class="chip {btn_class}" hx-get="/api/history?page={p}" hx-target="#history-body" hx-swap="outerHTML">{p}</button>'
-        )
-
-    if page < total_pages:
-        pag_buttons.append(
-            f'<button class="chip outline" hx-get="/api/history?page={page + 1}" hx-target="#history-body" hx-swap="outerHTML"><i>chevron_right</i></button>'
-        )
-
-    pag_html = (
-        f'<div id="history-pagination" hx-swap-oob="true" '
-        f'class="row center-align padding" style="justify-content: center; gap: 6px;">'
-        f"{''.join(pag_buttons)}"
-        f"</div>"
-    )
-
-    return HTMLResponse(content=f"{tbody_html}{pag_html}")

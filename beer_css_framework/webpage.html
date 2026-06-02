@@ -4,7 +4,6 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Lab Monitor | Cloud-Native IoT</title>
-    <!-- Beer CSS -->
     <link
       href="https://cdn.jsdelivr.net/npm/beercss@3.5.1/dist/cdn/beer.min.css"
       rel="stylesheet"
@@ -13,9 +12,7 @@
       type="module"
       src="https://cdn.jsdelivr.net/npm/beercss@3.5.1/dist/cdn/beer.min.js"
     ></script>
-    <!-- HTMX -->
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-    <!-- Favicon & Theme Color -->
     <link
       rel="icon"
       href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔥</text></svg>"
@@ -57,7 +54,6 @@
       </nav>
     </header>
     <main class="responsive padding">
-      <!-- TẦNG 1: CHỈ SỐ NHANH (Sử dụng 1 request duy nhất cho cả Grid để chống nghẽn Vercel) -->
       <div
         class="grid"
         id="status-grid"
@@ -79,7 +75,6 @@
               <div class="max"><h5>Diễn biến sự cố (Thời gian thực)</h5></div>
               <button class="chip primary">LIVE</button>
             </div>
-            <!-- hx-swap="outerHTML" để Backend tự động swap lớp vỏ div quản lý trigger -->
             <div
               class="graph-wrapper margin"
               hx-get="/api/analytics/graph/latest"
@@ -105,14 +100,21 @@
                 class="circle transparent"
                 hx-get="/api/history"
                 hx-target="#history-body"
-                hx-swap="innerHTML"
+                hx-swap="outerHTML"
               >
                 <i>refresh</i>
               </button>
             </div>
-            <div class="table-container">
-              <table class="border left-align">
-                <thead>
+            <div style="overflow-y: auto; max-height: 320px">
+              <table class="border left-align" style="width: 100%">
+                <thead
+                  style="
+                    position: sticky;
+                    top: 0;
+                    z-index: 1;
+                    background: #1e1e1e;
+                  "
+                >
                   <tr>
                     <th>ID</th>
                     <th>Bắt đầu</th>
@@ -121,10 +123,9 @@
                     <th>Hành động</th>
                   </tr>
                 </thead>
-                <!-- hx-swap="outerHTML" để cho phép Backend tự cập nhật Polling theo trang chủ động -->
                 <tbody
                   id="history-body"
-                  hx-get="/api/history?page=1"
+                  hx-get="/api/history"
                   hx-trigger="load"
                   hx-swap="outerHTML"
                 >
@@ -135,12 +136,6 @@
                   </tr>
                 </tbody>
               </table>
-              <!-- Vùng phân trang nhận diện HTMX OOB Swap để cập nhật các nút số trang -->
-              <div
-                id="history-pagination"
-                class="row center-align padding"
-                style="justify-content: center; gap: 6px"
-              ></div>
             </div>
           </article>
         </div>
