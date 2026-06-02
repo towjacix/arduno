@@ -57,68 +57,20 @@
       </nav>
     </header>
     <main class="responsive padding">
-      <!-- TẦNG 1: CHỈ SỐ NHANH -->
-      <div class="grid">
-        <div class="s12 m4">
-          <article
-            class="border round padding"
-            hx-get="/api/status"
-            hx-trigger="load, every 2s"
-            hx-select=".temp-data"
-            hx-swap="innerHTML"
-          >
-            <div class="temp-data">
-              <div class="row">
-                <i class="orange-text">thermostat</i>
-                <div class="max">
-                  <h6>Nhiệt độ</h6>
-                  <h4>--°C</h4>
-                </div>
-              </div>
-            </div>
-          </article>
-        </div>
-        <div class="s12 m4">
-          <article
-            class="border round padding"
-            hx-get="/api/status"
-            hx-trigger="load, every 2s"
-            hx-select=".smoke-data"
-            hx-swap="innerHTML"
-          >
-            <div class="smoke-data">
-              <div class="row">
-                <i class="grey-text">cloud</i>
-                <div class="max">
-                  <h6>Mật độ khói</h6>
-                  <h4>-- PPM</h4>
-                </div>
-              </div>
-            </div>
-          </article>
-        </div>
-        <div class="s12 m4">
-          <article
-            class="border round padding"
-            hx-get="/api/status"
-            hx-trigger="load, every 2s"
-            hx-select=".threshold-data"
-            hx-swap="innerHTML"
-          >
-            <div class="threshold-data">
-              <div class="row">
-                <i class="blue-text">psychology</i>
-                <div class="max">
-                  <h6>Ngưỡng tự động</h6>
-                  <h4>--°C</h4>
-                </div>
-              </div>
-            </div>
-          </article>
+      <!-- TẦNG 1: CHỈ SỐ NHANH (Sử dụng 1 request duy nhất cho cả Grid để chống nghẽn Vercel) -->
+      <div
+        class="grid"
+        id="status-grid"
+        hx-get="/api/status"
+        hx-trigger="load"
+        hx-swap="outerHTML"
+      >
+        <div class="s12 center-align padding">
+          <progress class="circle"></progress>
+          <p>Đang kết nối tới máy chủ cảm biến...</p>
         </div>
       </div>
       <div class="space"></div>
-      <!-- TẦNG 2: ĐỒ THỊ TRỰC TIẾP & LỊCH SỬ -->
       <div class="grid">
         <div class="s12">
           <article class="border round padding">
@@ -127,7 +79,7 @@
               <div class="max"><h5>Diễn biến sự cố (Thời gian thực)</h5></div>
               <button class="chip primary">LIVE</button>
             </div>
-            <!-- Vỏ bọc hx-swap="outerHTML" nhận trigger động điều khiển Polling từ Backend -->
+            <!-- hx-swap="outerHTML" để Backend tự động swap lớp vỏ div quản lý trigger -->
             <div
               class="graph-wrapper margin"
               hx-get="/api/analytics/graph/latest"
@@ -143,7 +95,6 @@
         </div>
       </div>
       <div class="space"></div>
-      <!-- TẦNG 3: BẢNG LỊCH SỬ SỰ CỐ -->
       <div class="grid">
         <div class="s12">
           <article class="border round">
@@ -170,12 +121,12 @@
                     <th>Hành động</th>
                   </tr>
                 </thead>
-                <!-- Phân bổ trigger kéo dữ liệu định kỳ mỗi 2 giây -->
+                <!-- hx-swap="outerHTML" để cho phép Backend tự cập nhật Polling theo trang chủ động -->
                 <tbody
                   id="history-body"
-                  hx-get="/api/history"
-                  hx-trigger="load, every 2s"
-                  hx-swap="innerHTML"
+                  hx-get="/api/history?page=1"
+                  hx-trigger="load"
+                  hx-swap="outerHTML"
                 >
                   <tr>
                     <td colspan="5" class="center-align">
@@ -184,6 +135,12 @@
                   </tr>
                 </tbody>
               </table>
+              <!-- Vùng phân trang nhận diện HTMX OOB Swap để cập nhật các nút số trang -->
+              <div
+                id="history-pagination"
+                class="row center-align padding"
+                style="justify-content: center; gap: 6px"
+              ></div>
             </div>
           </article>
         </div>
