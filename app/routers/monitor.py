@@ -33,7 +33,6 @@ async def get_dynamic_threshold() -> int:
     res = await database.db.execute(query, [window])
     avg_val = res.rows[0][0]
 
-    # Kiểm tra kiểu dữ liệu an toàn bằng biến tạm
     base_temp = float(avg_val) if isinstance(avg_val, (int, float)) else 30.0
     return int(base_temp + offset)
 
@@ -109,20 +108,21 @@ async def monitor_system(data: MonitorPayload):
 
 @router.get("/api/status", response_class=HTMLResponse)
 async def get_status_html():
+    """Gộp 3 thẻ chỉ số thành 1 cấu trúc Grid duy nhất để tối ưu hóa request."""
     if database.db is None:
-        return HTMLResponse("<div>Offline</div>")
+        return HTMLResponse("<div id='status-grid'>Offline</div>")
 
     res = await database.db.execute(
         "SELECT status, temp, smoke, current_dynamic_threshold, timestamp "
         "FROM system_state WHERE id=1"
     )
     if not res.rows:
-        return HTMLResponse("<div>No data</div>")
+        return HTMLResponse("<div id='status-grid'>No data</div>")
 
     r = res.rows[0]
     raw_status, raw_temp, raw_smoke, raw_thresh, raw_ts = r[0], r[1], r[2], r[3], r[4]
 
-    # Viết khối lệnh rẽ nhánh an toàn để ép kiểu tuyệt đối (Không dùng ternary một dòng)
+    # Khối lệnh rẽ nhánh an toàn để ép kiểu (Không dùng ternary một dòng)
     status = str(raw_status) if raw_status is not None else "safe"
     ts = str(raw_ts) if raw_ts is not None else ""
 
@@ -138,36 +138,60 @@ async def get_status_html():
     if isinstance(raw_thresh, int):
         thresh = int(raw_thresh)
 
+    # Nếu có cháy, thẻ Ngưỡng tự động sẽ nhấp nháy đỏ rực cảnh báo
     status_class = "critical-bg white-text" if status == "critical" else ""
     status_icon = "warning" if status == "critical" else "check_circle"
 
-    # Ngắt chuỗi để tuân thủ Ruff E501
-    temp_frag = (
-        '<div class="temp-data"><div class="row"><i class="orange-text">thermostat</i>'
-        f'<div class="max"><h6>Nhiệt độ</h6><h4>{temp}°C</h4></div></div></div>'
-    )
-    smoke_frag = (
-        '<div class="smoke-data"><div class="row"><i class="grey-text">cloud</i>'
-        f'<div class="max"><h6>Mật độ khói</h6><h4>{smoke} PPM</h4></div></div></div>'
-    )
-    thresh_frag = (
-        '<div class="threshold-data"><div class="row"><i class="blue-text">psychology</i>'
-        f'<div class="max"><h6>Ngưỡng tự động</h6><h4>{thresh}°C</h4></div></div></div>'
-    )
-    status_frag = (
-        f'<div class="system-status-card {status_class}">'
-        f'<article class="border padding center-align"><h5>'
-        f'<i class="small">{status_icon}</i> Hệ thống: {status.upper()}</h5>'
-        f"<p>{ts}</p></article></div>"
-    )
+    # Trả về toàn bộ thẻ cha mang thuộc tính hx-trigger="every 2s"
+    return HTMLResponse(
+        content=f"""
+    <div class="grid" id="status-grid" hx-get="/api/status" hx-trigger="every 2s" hx-swap="outerHTML">
+        <!-- Thẻ 1: Nhiệt độ -->
+        <div class="s12 m4">
+            <article class="border round padding" style="margin: 0;">
+                <div class="row">
+                    <i class="orange-text">thermostat</i>
+                    <div class="max">
+                        <h6>Nhiệt độ</h6>
+                        <h4>{temp:.1f}°C</h4>
+                    </div>
+                </div>
+            </article>
+        </div>
 
-    html_content = f"{temp_frag}{smoke_frag}{thresh_frag}{status_frag}"
-    return HTMLResponse(content=html_content)
+        <!-- Thẻ 2: Mật độ khói -->
+        <div class="s12 m4">
+            <article class="border round padding" style="margin: 0;">
+                <div class="row">
+                    <i class="grey-text">cloud</i>
+                    <div class="max">
+                        <h6>Mật độ khói</h6>
+                        <h4>{smoke} PPM</h4>
+                    </div>
+                </div>
+            </article>
+        </div>
+
+        <!-- Thẻ 3: Ngưỡng tự động kiêm Trạng thái -->
+        <div class="s12 m4 {status_class}">
+            <article class="border round padding" style="margin: 0;">
+                <div class="row">
+                    <i class="blue-text">psychology</i>
+                    <div class="max">
+                        <h6>Ngưỡng (Hệ thống: {status.upper()})</h6>
+                        <h4>{thresh}°C</h4>
+                    </div>
+                </div>
+            </article>
+        </div>
+    </div>
+    """
+    )
 
 
 @router.get("/api/history", response_class=HTMLResponse)
 async def get_history_html(page: int = 1):
-    """Lấy lịch sử cảnh báo có phân trang động (Numbered Pagination)."""
+    """Lấy lịch sử cảnh báo có phân trang động (Sử dụng Polling giãn cách 10 giây)."""
     if database.db is None:
         return HTMLResponse("")
 
@@ -186,17 +210,18 @@ async def get_history_html(page: int = 1):
     offset = (page - 1) * PAGE_SIZE
 
     # 2. Truy vấn dữ liệu phân trang
-    res = await database.db.execute(
+    # Sử dụng F-string để truyền trực tiếp LIMIT và OFFSET giúp giải quyết triệt để lỗi ép kiểu của SQLite Driver [9]
+    query = (
         "SELECT incident_id, start_time, end_time, peak_temp "
-        "FROM incidents ORDER BY 1 DESC LIMIT ? OFFSET ?",
-        [PAGE_SIZE, offset],
+        f"FROM incidents ORDER BY incident_id DESC LIMIT {PAGE_SIZE} OFFSET {offset}"
     )
+    res = await database.db.execute(query)
 
     rows = []
     for r in res.rows:
         inc_id_raw, start_time_raw, end_time_raw, peak_temp_raw = r[0], r[1], r[2], r[3]
 
-        # Viết khối lệnh rẽ nhánh an toàn để ép kiểu tuyệt đối [Khắc phục dòng lỗi 127]
+        # Viết khối lệnh rẽ nhánh an toàn để ép kiểu tuyệt đối
         inc_id = int(inc_id_raw) if isinstance(inc_id_raw, int) else 0
         start_time = str(start_time_raw) if start_time_raw is not None else ""
         dest_time = str(end_time_raw) if end_time_raw is not None else ""
@@ -226,10 +251,10 @@ async def get_history_html(page: int = 1):
         else "<tr><td colspan='5' class='center-align'>Chưa có nhật ký</td></tr>"
     )
 
-    # Khối <tbody> tự động Polling đúng trang hiện tại
+    # Khối <tbody> giãn chu kỳ tự động Polling từ 2s ra thành 10s (every 10s) để giảm tải!
     tbody_html = (
         f'<tbody id="history-body" hx-get="/api/history?page={page}" '
-        f'hx-trigger="every 2s" hx-swap="outerHTML">'
+        f'hx-trigger="every 10s" hx-swap="outerHTML">'
         f"{tbody_content}"
         f"</tbody>"
     )
