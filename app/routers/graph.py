@@ -26,7 +26,7 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
         if state_res.rows:
             current_status = str(state_res.rows[0][0])
 
-    # 2. XÁC ĐỊNH DỮ LIỆU CẦN VẼ (REAL-TIME AMBIENT VS INCIDENTS)
+    # 2. XÁC ĐỊNH DỮ LIỆU CẦN VẼ (SỬ DỤNG CẢ TEMP VÀ SMOKE)
     if is_latest:
         if current_status == "critical":
             # ĐANG CHÁY: Vẽ diễn biến sự cố Active thời gian thực
@@ -39,14 +39,14 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
             if id_res.rows:
                 target_id = int(cast(int, id_res.rows[0][0]))
                 q = (
-                    "SELECT temp, timestamp FROM burning_logs "
+                    "SELECT temp, smoke, timestamp FROM burning_logs "
                     "WHERE incident_id = ? ORDER BY timestamp ASC"
                 )
                 res = await database.db.execute(q, [target_id])
             else:
                 res = await database.db.execute(
-                    "SELECT temp, timestamp FROM ("
-                    "  SELECT temp, timestamp FROM burning_logs "
+                    "SELECT temp, smoke, timestamp FROM ("
+                    "  SELECT temp, smoke, timestamp FROM burning_logs "
                     "  ORDER BY id DESC LIMIT 30"
                     ") ORDER BY timestamp ASC"
                 )
@@ -54,8 +54,8 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
             # ĐANG AN TOÀN: Vẽ biểu đồ giám sát môi trường phòng Lab thời gian thực (incident_id = 0)
             target_id = 0
             q = (
-                "SELECT temp, timestamp FROM ("
-                "  SELECT temp, timestamp FROM burning_logs "
+                "SELECT temp, smoke, timestamp FROM ("
+                "  SELECT temp, smoke, timestamp FROM burning_logs "
                 "  WHERE incident_id = 0 "
                 "  ORDER BY id DESC LIMIT 30"
                 ") ORDER BY timestamp ASC"
@@ -65,7 +65,7 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
         # XEM LỊCH SỬ TĨNH: Vẽ sự cố cụ thể đã chọn
         target_id = int(incident_id)
         q = (
-            "SELECT temp, timestamp FROM burning_logs "
+            "SELECT temp, smoke, timestamp FROM burning_logs "
             "WHERE incident_id = ? ORDER BY timestamp ASC"
         )
         res = await database.db.execute(q, [target_id])
@@ -78,19 +78,22 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
             is_active = str(id_res.rows[0][0]) == "Active"
 
     # 3. ÉP KIỂU VÀ CHUẨN HÓA DỮ LIỆU (Type Safety cho Basedpyright)
-    points: list[float] = []
+    points_t: list[float] = []
+    points_s: list[float] = []
     times: list[str] = []
 
     for row in res.rows:
-        val = row[0]
-        ts = row[1]
-        if isinstance(val, (int, float)):
-            points.append(float(val))
+        t_val = row[0]
+        s_val = row[1]
+        ts = row[2]
+        if isinstance(t_val, (int, float)) and isinstance(s_val, (int, float)):
+            points_t.append(float(t_val))
+            points_s.append(float(s_val))
             ts_str = str(ts) if ts is not None else ""
             time_part = ts_str.split(" ")[1] if " " in ts_str else ts_str
             times.append(time_part)
 
-    if not points:
+    if not points_t:
         err_msg = "<p class='padding center-align'>Chưa có dữ liệu đo đạc.</p>"
         back_btn = ""
         if not is_latest:
@@ -113,136 +116,157 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
         )
         return Response(content=err_div, media_type="text/html")
 
-    # 4. THIẾT LẬP THÔNG SỐ TOẠ ĐỘ VÀ PADDING
+    # 4. THIẾT LẬP THÔNG SỐ TOẠ ĐỘ VÀ PADDING (2 BÊN Y-AXIS)
     w, h = 800, 200
-    p_left, p_right, p_top, p_bottom = 60, 20, 20, 30
+    p_left, p_right, p_top, p_bottom = (
+        60,
+        60,
+        20,
+        30,
+    )  # Chừa đều 60px hai bên cho 2 trục Y
     chart_w = w - p_left - p_right
     chart_h = h - p_top - p_bottom
+    y_min = h - p_bottom
 
-    min_t, max_t = min(points), max(points)
-
-    # [NÂNG CẤP: THUẬT TOÁN CO GIÃN ĐỒ THỊ CHỦ ĐỘNG]
-    # detail: dải đo hẹp 5°C để soi rõ biến động nhỏ. flat: dải đo rộng 40°C để làm phẳng.
-    MIN_SPAN = 5.0 if zoom == "detail" else 40.0
+    # --- TOÁN HỌC CHO TRỤC TRÁI (NHIỆT ĐỘ - ĐƯỜNG) ---
+    min_t, max_t = min(points_t), max(points_t)
+    MIN_SPAN = 2.0 if zoom == "detail" else 40.0
     current_span = max_t - min_t
     if current_span < MIN_SPAN:
         diff = MIN_SPAN - current_span
         min_t = max(20.0, min_t - diff / 2.0)
         max_t = min_t + MIN_SPAN
+    span_t = max_t - min_t
 
-    span = max_t - min_t
+    # --- TOÁN HỌC CHO TRỤC PHẢI (KHÓI - CỘT) ---
+    max_s = max(points_s) if points_s else 300.0
+    smoke_ceiling = max(400.0, float(max_s))  # Giới hạn dải khói tối thiểu là 400 PPM
+    span_s = smoke_ceiling
 
-    # Tính toán tọa độ của đường trendline
-    coords: list[str] = []
-    num_pts = len(points)
-    for i, v in enumerate(points):
+    # Tính toán tọa độ của đường trendline Nhiệt độ
+    coords_t: list[str] = []
+    num_pts = len(points_t)
+    for i, v in enumerate(points_t):
         x = p_left + (i / (num_pts - 1)) * chart_w if num_pts > 1 else p_left
-        y = (h - p_bottom) - ((v - min_t) / span * chart_h)
-        coords.append(f"{x},{y}")
+        y = y_min - ((v - min_t) / span_t * chart_h)
+        coords_t.append(f"{x},{y}")
 
-    points_str = " ".join(coords)
+    points_str_t = " ".join(coords_t)
     x_last = p_left + chart_w if num_pts > 1 else p_left
 
-    # 5. KHỞI TẠO TỌA ĐỘ CHO 3 ĐIỂM DỮ LIỆU CHÍNH
+    # 5. KHỞI TẠO TỌA ĐỘ CHO 3 ĐIỂM DỰ LIỆU NHIỆT ĐỘ CHÍNH
     mid_idx = num_pts // 2
-    t_start = points[0]
+    t_start = points_t[0]
     time_start = times[0]
-    y_start = (h - p_bottom) - ((t_start - min_t) / span * chart_h)
+    y_start_t = y_min - ((t_start - min_t) / span_t * chart_h)
 
-    t_mid = points[mid_idx]
-    time_mid = times[mid_idx]
-    x_mid = p_left + (mid_idx / (num_pts - 1)) * chart_w if num_pts > 1 else p_left
-    y_mid = (h - p_bottom) - ((t_mid - min_t) / span * chart_h)
+    peak_idx = points_t.index(max(points_t))
+    t_peak = points_t[peak_idx]
+    time_peak = times[peak_idx]
+    x_peak = p_left + (peak_idx / (num_pts - 1)) * chart_w if num_pts > 1 else p_left
+    y_peak_t = y_min - ((t_peak - min_t) / span_t * chart_h)
 
-    t_end = points[-1]
+    t_end = points_t[-1]
     time_end = times[-1]
-    y_end = (h - p_bottom) - ((t_end - min_t) / span * chart_h)
+    y_end_t = y_min - ((t_end - min_t) / span_t * chart_h)
 
-    # 6. THUẬT TOÁN CHỐNG ĐÈ CHỮ THÔNG MINH
+    # 6. DỰNG CỘT KHÓI (MÀU XANH LAM TRONG SUỐT)
+    columns_list: list[str] = []
+    col_w = (chart_w / num_pts) * 0.4 if num_pts > 1 else 15.0  # Chiều rộng cột co giãn
+    for i, s in enumerate(points_s):
+        x = p_left + (i / (num_pts - 1)) * chart_w if num_pts > 1 else p_left
+        col_h = (s / span_s) * chart_h
+        col_x = x - col_w / 2.0
+        col_y = y_min - col_h
+        rect = (
+            f'<rect x="{col_x}" y="{col_y}" width="{col_w}" height="{col_h}" '
+            f'fill="rgba(33, 150, 243, 0.12)" stroke="#2196f3" stroke-width="0.8" />'
+        )
+        columns_list.append(rect)
+    columns_svg = "".join(columns_list)
+
+    # 7. ĐƯỜNG DÓNG CHỈ ĐIỂM (PROJECTION LINES)
     axis_color = "#455a64"
     text_color = "#9e9e9e"
-    grid_color = "rgba(255, 255, 255, 0.22)"
-    y_min = h - p_bottom
+    grid_color = "rgba(255, 255, 255, 0.15)"
 
-    MIN_LABEL_GAP = 20.0
-
-    y_labels_list = []
-    proj_lines_list = []
-    data_nodes_list = []
-
-    # Điểm 1 (Bắt đầu)
-    y_labels_list.append(
-        f'<text x="{p_left - 10}" y="{y_start + 4}" text-anchor="end" fill="{text_color}" font-size="11">{t_start:.1f}°C</text>'
-    )
-    data_nodes_list.append(
-        f'<circle cx="{p_left}" cy="{y_start}" r="3" fill="#ff3d00" />'
+    proj_lines = (
+        f'<line x1="{p_left}" y1="{y_peak_t}" x2="{x_peak}" y2="{y_peak_t}" stroke="{grid_color}" stroke-dasharray="4" />'
+        f'<line x1="{x_peak}" y1="{y_min}" x2="{x_peak}" y2="{p_top}" stroke="{grid_color}" stroke-dasharray="4" />'
+        f'<line x1="{p_left}" y1="{y_end_t}" x2="{x_last}" y2="{y_end_t}" stroke="{grid_color}" stroke-dasharray="4" />'
+        f'<line x1="{x_last}" y1="{y_min}" x2="{x_last}" y2="{p_top}" stroke="{grid_color}" stroke-dasharray="4" />'
     )
 
-    # Điểm 2 (Giữa)
-    if abs(y_mid - y_start) >= MIN_LABEL_GAP:
-        y_labels_list.append(
-            f'<text x="{p_left - 10}" y="{y_mid + 4}" text-anchor="end" fill="{text_color}" font-size="11">{t_mid:.1f}°C</text>'
-        )
-        proj_lines_list.append(
-            f'<line x1="{p_left}" y1="{y_mid}" x2="{x_mid}" y2="{y_mid}" stroke="{grid_color}" stroke-dasharray="4" />'
-        )
-
-    proj_lines_list.append(
-        f'<line x1="{x_mid}" y1="{y_min}" x2="{x_mid}" y2="{y_mid}" stroke="{grid_color}" stroke-dasharray="4" />'
-    )
-    data_nodes_list.append(
-        f'<circle cx="{x_mid}" cy="{y_mid}" r="2.5" fill="#ff3d00" />'
-    )
-
-    # Điểm 3 (Kết thúc)
-    if abs(y_end - y_start) >= MIN_LABEL_GAP and abs(y_end - y_mid) >= MIN_LABEL_GAP:
-        y_labels_list.append(
-            f'<text x="{p_left - 10}" y="{y_end + 4}" text-anchor="end" fill="{text_color}" font-size="11">{t_end:.1f}°C</text>'
-        )
-        proj_lines_list.append(
-            f'<line x1="{p_left}" y1="{y_end}" x2="{x_last}" y2="{y_end}" stroke="{grid_color}" stroke-dasharray="4" />'
-        )
-
-    proj_lines_list.append(
-        f'<line x1="{x_last}" y1="{y_min}" x2="{x_last}" y2="{y_end}" stroke="{grid_color}" stroke-dasharray="4" />'
-    )
-    data_nodes_list.append(
-        f'<circle cx="{x_last}" cy="{y_end}" r="2.5" fill="#ff3d00" />'
-    )
-
-    y_labels = "".join(y_labels_list)
-    proj_lines = "".join(proj_lines_list)
-    data_nodes = "".join(data_nodes_list)
-
-    # Trục chính và nhãn
+    # Trục chính kép (Axes)
     axes = (
-        f'<line x1="{p_left}" y1="{p_top}" x2="{p_left}" y2="{y_min}" stroke="{axis_color}" stroke-width="1.2" />'
-        f'<line x1="{p_left}" y1="{y_min}" x2="{w - p_right}" y2="{y_min}" stroke="{axis_color}" stroke-width="1.2" />'
+        f'<line x1="{p_left}" y1="{p_top}" x2="{p_left}" y2="{y_min}" stroke="{axis_color}" stroke-width="1.2" />'  # Trục Trái Y
+        f'<line x1="{w - p_right}" y1="{p_top}" x2="{w - p_right}" y2="{y_min}" stroke="{axis_color}" stroke-width="1.2" />'  # Trục Phải Y
+        f'<line x1="{p_left}" y1="{y_min}" x2="{w - p_right}" y2="{y_min}" stroke="{axis_color}" stroke-width="1.2" />'  # Trục Hoành X
     )
 
-    x_labels = (
+    # NHÃN TRỤC Y TRÁI (NHIỆT ĐỘ - MÀU ĐỎ CAM)
+    MIN_LABEL_GAP = 20.0
+    y_labels_temp_list = [
+        f'<text x="{p_left - 10}" y="{y_start_t + 4}" text-anchor="end" fill="#ff5722" font-size="11">{t_start:.1f}°C</text>'
+    ]
+    if abs(y_peak_t - y_start_t) >= MIN_LABEL_GAP:
+        y_labels_temp_list.append(
+            f'<text x="{p_left - 10}" y="{y_peak_t + 4}" text-anchor="end" fill="#ff5722" font-size="11">{t_peak:.1f}°C</text>'
+        )
+    if (
+        abs(y_end_t - y_start_t) >= MIN_LABEL_GAP
+        and abs(y_end_t - y_peak_t) >= MIN_LABEL_GAP
+    ):
+        y_labels_temp_list.append(
+            f'<text x="{p_left - 10}" y="{y_end_t + 4}" text-anchor="end" fill="#ff5722" font-size="11">{t_end:.1f}°C</text>'
+        )
+    y_labels_temp = "".join(y_labels_temp_list)
+
+    # NHÃN TRỤC Y PHẢI (KHÓI - MÀU XANH LAM)
+    y_mid = p_top + chart_h / 2.0
+    y_labels_smoke = (
+        f'<text x="{w - p_right + 10}" y="{p_top + 4}" text-anchor="start" fill="#2196f3" font-size="11">{smoke_ceiling:.0f} PPM</text>'
+        f'<text x="{w - p_right + 10}" y="{y_mid + 4}" text-anchor="start" fill="#2196f3" font-size="11">{(smoke_ceiling / 2):.0f} PPM</text>'
+        f'<text x="{w - p_right + 10}" y="{y_min + 4}" text-anchor="start" fill="#2196f3" font-size="11">0 PPM</text>'
+    )
+
+    # NHÃN TRỤC X (THỜI GIAN)
+    x_labels_list = [
         f'<text x="{p_left}" y="{h - 10}" text-anchor="start" fill="{text_color}" font-size="11">{time_start}</text>'
-        f'<text x="{x_mid}" y="{h - 10}" text-anchor="middle" fill="{text_color}" font-size="11">{time_mid}</text>'
+    ]
+    MIN_X_GAP = 80.0
+    if abs(x_peak - p_left) >= MIN_X_GAP and abs(x_last - x_peak) >= MIN_X_GAP:
+        x_labels_list.append(
+            f'<text x="{x_peak}" y="{h - 10}" text-anchor="middle" fill="{text_color}" font-size="11">{time_peak}</text>'
+        )
+    x_labels_list.append(
         f'<text x="{x_last}" y="{h - 10}" text-anchor="end" fill="{text_color}" font-size="11">{time_end}</text>'
     )
+    x_labels = "".join(x_labels_list)
 
-    # 7. DỰNG HÌNH VECTOR (SVG) - Sửa đổi thứ tự vẽ: vẽ svg_path trước để tránh che mờ nét đứt
+    data_nodes = (
+        f'<circle cx="{p_left}" cy="{y_start_t}" r="3" fill="#ff3d00" />'
+        f'<circle cx="{x_peak}" cy="{y_peak_t}" r="3" fill="#ff3d00" />'
+        f'<circle cx="{x_last}" cy="{y_end_t}" r="2.5" fill="#ff3d00" />'
+    )
+
+    # 8. DỰNG HÌNH VECTOR (SVG) - Vẽ các cột khói lót nền, sau đó mới phủ mảng màu và trendline nhiệt độ lên trên
     svg_path = (
-        f'<path d="M {p_left},{y_min} L {points_str} L {x_last},{y_min} Z" '
-        'fill="rgba(255,61,0,0.1)"/>'
+        f'<path d="M {p_left},{y_min} L {points_str_t} L {x_last},{y_min} Z" '
+        'fill="rgba(255,61,0,0.08)"/>'
     )
     svg_line = (
         f'<polyline fill="none" stroke="#ff3d00" stroke-width="1.8" '
-        f'stroke-linecap="round" points="{points_str}" />'
+        f'stroke-linecap="round" points="{points_str_t}" />'
     )
 
     svg_graphics = (
         f'<svg viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg" '
         f'style="width:100%; height:{h}px; overflow:visible; display:block;">'
-        f"{axes}{svg_path}{proj_lines}{y_labels}{x_labels}{svg_line}{data_nodes}</svg>"
+        f"{axes}{columns_svg}{svg_path}{proj_lines}{y_labels_temp}{y_labels_smoke}{x_labels}{svg_line}{data_nodes}</svg>"
     )
 
-    # 8. THANH ĐIỀU HƯỚNG ZOOM ĐỘNG (Bằng Beer CSS & HTMX)
+    # 9. TRẢ VỀ TRẠNG THÁI KIỂM SOÁT TRIGGER QUA HTML (HATEOAS)
     class_flat = "primary" if zoom == "flat" else "outline"
     class_detail = "primary" if zoom == "detail" else "outline"
     zoom_bar = (
@@ -252,7 +276,6 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
         f"</div>"
     )
 
-    # 9. TRẢ VỀ TRẠNG THÁI KIỂM SOÁT TRIGGER QUA HTML (HATEOAS)
     if is_latest:
         wrapper = (
             f'<div class="graph-wrapper margin" '
@@ -283,7 +306,7 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
             "<i>sensors</i> Trở về Giám Sát Phòng (Ambient)</button></div>"
         )
         wrapper = (
-            f'<div class="graph-wrapper margin" hx-swap="outerHTML">'
+            '<div class="graph-wrapper margin" hx-swap="outerHTML">'
             f"{status_bar}{zoom_bar}{svg_graphics}</div>"
         )
 
