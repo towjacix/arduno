@@ -67,7 +67,6 @@ async def get_incident_graph(incident_id: str):
                 "Quay lại Xem Trực Tiếp</button></div>"
             )
 
-        # FIX CHO DÒNG 72: Định nghĩa chuỗi HTMX riêng biệt để tránh lỗi cú pháp f-string
         if is_latest:
             htmx_attrs = 'hx-get="/api/analytics/graph/latest" hx-trigger="every 5s" hx-swap="outerHTML"'
         else:
@@ -85,7 +84,18 @@ async def get_incident_graph(incident_id: str):
     chart_h = h - p_top - p_bottom
 
     min_t, max_t = min(points), max(points)
-    span = (max_t - min_t) if max_t != min_t else 1.0
+
+    # [THUẬT TOÁN LÀM PHẲNG ĐỒ THỊ]
+    # Thiết lập khoảng cách đo (span) tối thiểu là 40°C để đồ thị không bị dốc đứng
+    # và khống chế cận dưới không xuống dưới mức nhiệt phòng tiêu chuẩn (20°C).
+    MIN_SPAN = 40.0
+    current_span = max_t - min_t
+    if current_span < MIN_SPAN:
+        diff = MIN_SPAN - current_span
+        min_t = max(20.0, min_t - diff / 2.0)
+        max_t = min_t + MIN_SPAN
+
+    span = max_t - min_t
 
     # Tính toán tọa độ của đường trendline
     coords: list[str] = []
@@ -137,12 +147,12 @@ async def get_incident_graph(incident_id: str):
         f'<path d="M {p_left},{y_min} L {points_str} L {x_last},{y_min} Z" '
         'fill="rgba(255,61,0,0.1)"/>'
     )
+    # Nét hẹp: stroke-width giảm từ 3 xuống còn 1.8 để tăng độ mảnh và tinh tế
     svg_line = (
-        f'<polyline fill="none" stroke="#ff3d00" stroke-width="3" '
+        f'<polyline fill="none" stroke="#ff3d00" stroke-width="1.8" '
         f'stroke-linecap="round" points="{points_str}" />'
     )
 
-    # Kết hợp các thành phần đồ họa
     svg_graphics = (
         f'<svg viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg" '
         f'style="width:100%; height:{h}px; overflow:visible; display:block;">'
@@ -151,7 +161,6 @@ async def get_incident_graph(incident_id: str):
 
     # 7. TRẢ VỀ TRẠNG THÁI KIỂM SOÁT TRIGGER QUA HTML (HATEOAS)
     if is_latest:
-        # Xem trực tiếp: Tự động poll mỗi 5 giây
         wrapper = (
             '<div class="graph-wrapper margin" '
             'hx-get="/api/analytics/graph/latest" '
@@ -159,7 +168,6 @@ async def get_incident_graph(incident_id: str):
             f"{svg_graphics}</div>"
         )
     else:
-        # Xem lịch sử: Dừng poll, chèn nút quay về LIVE
         status_bar = (
             '<div class="row margin valign" style="gap: 12px; margin-bottom: 16px;">'
             f'<span class="chip error padding">Đang xem lịch sử vụ #{target_id}</span>'
