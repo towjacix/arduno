@@ -13,7 +13,7 @@ temp_offset = 10
 
 #! SLIDING WINDOW: Number of samples (2s each) for Moving Average calculation.
 # 30 samples = 60-second observation window.
-window_size = 30
+window_size = 10
 
 #! HYSTERESIS: Anti-flicker buffer in Degrees Celsius.
 # Prevents state oscillation when temp floats exactly at threshold.
