@@ -8,7 +8,6 @@ from app.config import CONFIG
 from app.schemas import MonitorPayload
 
 
-# Khai báo chính thức cho Basedpyright nhận diện thuộc tính công khai
 __all__ = ["router"]
 
 router = APIRouter()
@@ -22,7 +21,6 @@ async def get_dynamic_threshold() -> int:
     window = int(CONFIG["window_size"])
     offset = int(CONFIG["temp_offset"])
 
-    # Thêm dấu đóng ngoặc đơn ")" ở dòng cuối để khép lại truy vấn con SQLite
     query = (
         "SELECT AVG(temp) FROM ("
         "SELECT temp FROM burning_logs "
@@ -78,7 +76,7 @@ async def monitor_system(data: MonitorPayload):
             raw_inc_id = inc_res.rows[0][0]
             raw_peak = inc_res.rows[0][1]
 
-            inc_id = int(raw_inc_id) if isinstance(raw_inc_id, int) else 0
+            active_inc_id = int(raw_inc_id) if isinstance(raw_inc_id, int) else 0
             old_peak = float(raw_peak) if isinstance(raw_peak, (int, float)) else 0.0
 
             if data.temp > old_peak:
@@ -122,7 +120,6 @@ async def get_status_html():
     r = res.rows[0]
     raw_status, raw_temp, raw_smoke, raw_thresh, raw_ts = r[0], r[1], r[2], r[3], r[4]
 
-    # Khối lệnh rẽ nhánh an toàn để ép kiểu (Không dùng ternary một dòng)
     status = str(raw_status) if raw_status is not None else "safe"
     ts = str(raw_ts) if raw_ts is not None else ""
 
@@ -210,7 +207,6 @@ async def get_history_html(page: int = 1):
     offset = (page - 1) * PAGE_SIZE
 
     # 2. Truy vấn dữ liệu phân trang
-    # Sử dụng F-string để truyền trực tiếp LIMIT và OFFSET giúp giải quyết triệt để lỗi ép kiểu của SQLite Driver [9]
     query = (
         "SELECT incident_id, start_time, end_time, peak_temp "
         f"FROM incidents ORDER BY incident_id DESC LIMIT {PAGE_SIZE} OFFSET {offset}"
@@ -251,7 +247,7 @@ async def get_history_html(page: int = 1):
         else "<tr><td colspan='5' class='center-align'>Chưa có nhật ký</td></tr>"
     )
 
-    # Khối <tbody> giãn chu kỳ tự động Polling từ 2s ra thành 10s (every 10s) để giảm tải!
+    # Khối <tbody> tự động Polling đúng trang hiện tại (Giãn chu kỳ về 10 giây để chống nghẽn)
     tbody_html = (
         f'<tbody id="history-body" hx-get="/api/history?page={page}" '
         f'hx-trigger="every 10s" hx-swap="outerHTML">'
