@@ -9,15 +9,14 @@ router = APIRouter()
 
 
 @router.get("/api/analytics/graph/{incident_id}")
-async def get_incident_graph(incident_id: str):
+async def get_incident_graph(incident_id: str, zoom: str = "flat"):
     if database.db is None:
         return Response(content="Database Error", status_code=500)
 
-    # KHAI BÁO MẶC ĐỊNH TRÊN ĐẦU HÀM ĐỂ TRÁNH LỖI PHẠM VI BIẾN (reportUndefinedVariable)
     target_id: int = 0
     is_latest = incident_id == "latest"
     current_status = "safe"
-    is_active: bool = False
+    is_active = False
 
     # 1. KIỂM TRA TRẠNG THÁI HỆ THỐNG HIỆN TẠI (CHỈ KHI XEM LIVE)
     if is_latest:
