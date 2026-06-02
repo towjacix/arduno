@@ -29,7 +29,7 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
         if state_res.rows:
             current_status = str(state_res.rows[0][0])
 
-    # 2. XÁC ĐỊNH DỮ LIỆU CẦN VẼ (CẢ TEMP VÀ SMOKE)
+    # 2. XÁC ĐỊNH DỮ LIỆU CẦN VẼ (SỬ DỤNG CƠ CHẾ SẮP XẾP THEO ID ĐỂ TRANH LỆCH NGÀY) [1]
     if is_latest:
         if current_status == "critical":
             # ĐANG CHÁY: Vẽ diễn biến sự cố Active thời gian thực
@@ -43,7 +43,7 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
                 target_id = int(cast(int, id_res.rows[0][0]))
                 q = (
                     "SELECT temp, smoke, timestamp FROM burning_logs "
-                    "WHERE incident_id = ? ORDER BY timestamp ASC"
+                    "WHERE incident_id = ? ORDER BY id ASC"  # Sắp xếp theo khóa chính tự tăng
                 )
                 res = await database.db.execute(q, [target_id])
             else:
@@ -51,17 +51,17 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
                     "SELECT temp, smoke, timestamp FROM ("
                     "  SELECT temp, smoke, timestamp FROM burning_logs "
                     "  ORDER BY id DESC LIMIT 30"
-                    ") ORDER BY timestamp ASC"
+                    ") ORDER BY id ASC"  # Sắp xếp theo khóa chính tự tăng
                 )
         else:
-            # ĐANG AN TOÀN: Vẽ biểu đồ giám sát môi trường phòng Lab thời gian thực (incident_id = 0)
+            # ĐANG AN TOÀN: Vẽ biểu đồ thời gian thực (incident_id = 0)
             target_id = 0
             q = (
                 "SELECT temp, smoke, timestamp FROM ("
                 "  SELECT temp, smoke, timestamp FROM burning_logs "
                 "  WHERE incident_id = 0 "
                 "  ORDER BY id DESC LIMIT 30"
-                ") ORDER BY timestamp ASC"
+                ") ORDER BY id ASC"  # Sắp xếp theo khóa chính tự tăng
             )
             res = await database.db.execute(q)
     else:
@@ -69,7 +69,7 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
         target_id = int(incident_id)
         q = (
             "SELECT temp, smoke, timestamp FROM burning_logs "
-            "WHERE incident_id = ? ORDER BY timestamp ASC"
+            "WHERE incident_id = ? ORDER BY id ASC"  # Sắp xếp theo khóa chính tự tăng
         )
         res = await database.db.execute(q, [target_id])
 

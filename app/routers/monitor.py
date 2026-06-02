@@ -8,6 +8,7 @@ from app.config import CONFIG
 from app.schemas import MonitorPayload
 
 
+# Khai báo chính thức cho Basedpyright nhận diện thuộc tính công khai
 __all__ = ["router"]
 
 router = APIRouter()
@@ -21,6 +22,7 @@ async def get_dynamic_threshold() -> int:
     window = int(CONFIG["window_size"])
     offset = int(CONFIG["temp_offset"])
 
+    # Thêm dấu đóng ngoặc đơn ")" ở dòng cuối để khép lại truy vấn con SQLite
     query = (
         "SELECT AVG(temp) FROM ("
         "SELECT temp FROM burning_logs "
@@ -76,7 +78,7 @@ async def monitor_system(data: MonitorPayload):
             raw_inc_id = inc_res.rows[0][0]
             raw_peak = inc_res.rows[0][1]
 
-            active_inc_id = int(raw_inc_id) if isinstance(raw_inc_id, int) else 0
+            inc_id = int(raw_inc_id) if isinstance(raw_inc_id, int) else 0
             old_peak = float(raw_peak) if isinstance(raw_peak, (int, float)) else 0.0
 
             if data.temp > old_peak:
@@ -120,6 +122,7 @@ async def get_status_html():
     r = res.rows[0]
     raw_status, raw_temp, raw_smoke, raw_thresh, raw_ts = r[0], r[1], r[2], r[3], r[4]
 
+    # Khối lệnh rẽ nhánh an toàn để ép kiểu (Không dùng ternary một dòng)
     status = str(raw_status) if raw_status is not None else "safe"
     ts = str(raw_ts) if raw_ts is not None else ""
 
@@ -135,8 +138,9 @@ async def get_status_html():
     if isinstance(raw_thresh, int):
         thresh = int(raw_thresh)
 
-    # Nếu có cháy, thẻ Ngưỡng tự động sẽ nhấp nháy đỏ rực cảnh báo
-    status_class = "critical-bg white-text" if status == "critical" else ""
+    # Áp dụng màu đỏ cảnh báo của Beer CSS ("error") trực tiếp lên thẻ <article> để hiển thị chữ trắng [1]
+    status_class = "error" if status == "critical" else ""
+    icon_class = "" if status == "critical" else "blue-text"
     status_icon = "warning" if status == "critical" else "check_circle"
 
     # Trả về toàn bộ thẻ cha mang thuộc tính hx-trigger="every 2s"
@@ -170,10 +174,10 @@ async def get_status_html():
         </div>
 
         <!-- Thẻ 3: Ngưỡng tự động kiêm Trạng thái -->
-        <div class="s12 m4 {status_class}">
-            <article class="border round padding" style="margin: 0;">
+        <div class="s12 m4">
+            <article class="border round padding {status_class}" style="margin: 0;">
                 <div class="row">
-                    <i class="blue-text">psychology</i>
+                    <i class="{icon_class}">{status_icon}</i>
                     <div class="max">
                         <h6>Ngưỡng (Hệ thống: {status.upper()})</h6>
                         <h4>{thresh}°C</h4>
@@ -207,6 +211,7 @@ async def get_history_html(page: int = 1):
     offset = (page - 1) * PAGE_SIZE
 
     # 2. Truy vấn dữ liệu phân trang
+    # Sử dụng F-string để truyền trực tiếp LIMIT và OFFSET giúp giải quyết triệt để lỗi ép kiểu của SQLite Driver [9]
     query = (
         "SELECT incident_id, start_time, end_time, peak_temp "
         f"FROM incidents ORDER BY incident_id DESC LIMIT {PAGE_SIZE} OFFSET {offset}"
@@ -217,7 +222,6 @@ async def get_history_html(page: int = 1):
     for r in res.rows:
         inc_id_raw, start_time_raw, end_time_raw, peak_temp_raw = r[0], r[1], r[2], r[3]
 
-        # Viết khối lệnh rẽ nhánh an toàn để ép kiểu tuyệt đối
         inc_id = int(inc_id_raw) if isinstance(inc_id_raw, int) else 0
         start_time = str(start_time_raw) if start_time_raw is not None else ""
         dest_time = str(end_time_raw) if end_time_raw is not None else ""
@@ -247,7 +251,7 @@ async def get_history_html(page: int = 1):
         else "<tr><td colspan='5' class='center-align'>Chưa có nhật ký</td></tr>"
     )
 
-    # Khối <tbody> tự động Polling đúng trang hiện tại (Giãn chu kỳ về 10 giây để chống nghẽn)
+    # Khối <tbody> tự động Polling đúng trang hiện tại
     tbody_html = (
         f'<tbody id="history-body" hx-get="/api/history?page={page}" '
         f'hx-trigger="every 10s" hx-swap="outerHTML">'
