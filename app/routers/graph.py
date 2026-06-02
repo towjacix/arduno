@@ -14,62 +14,162 @@ async def get_incident_graph(incident_id: str):
         return Response(content="Database Error", status_code=500)
 
     target_id: int = 0
-    if incident_id == "latest":
-        # Tìm ID lớn nhất
+    is_latest = incident_id == "latest"
+
+    # 1. Xác định Incident ID cần kết xuất đồ họa
+    if is_latest:
         id_q = "SELECT incident_id FROM incidents ORDER BY incident_id DESC LIMIT 1"
         id_res = await database.db.execute(id_q)
         if not id_res.rows:
-            return Response(content="<p>No data</p>", media_type="text/html")
-        # Ép kiểu giá trị ID
+            empty_div = (
+                '<div class="graph-wrapper margin" '
+                'hx-get="/api/analytics/graph/latest" '
+                'hx-trigger="every 5s" hx-swap="outerHTML">'
+                '<p class="center-align padding">Hệ thống đang hoạt động an toàn. '
+                "Chưa có sự cố để vẽ đồ thị.</p></div>"
+            )
+            return Response(content=empty_div, media_type="text/html")
         target_id = int(cast(int, id_res.rows[0][0]))
     else:
         target_id = int(incident_id)
 
-    # Truy vấn log
-    q = "SELECT temp FROM burning_logs WHERE incident_id = ? ORDER BY timestamp ASC"
+    # 2. Truy vấn dữ liệu nhiệt độ và mốc thời gian tương ứng
+    q = (
+        "SELECT temp, timestamp FROM burning_logs "
+        "WHERE incident_id = ? ORDER BY timestamp ASC"
+    )
     res = await database.db.execute(q, [target_id])
 
-    # --- CÁCH FIX LỖI BASED PYRIGHT [Dòng 32] ---
+    # Ép kiểu và tách mảng an toàn (Thu hẹp kiểu dữ liệu cho Basedpyright)
     points: list[float] = []
+    times: list[str] = []
+
     for row in res.rows:
-        val = row[0]  # Lấy giá trị ra biến tạm
-        # Kiểm tra kiểu dữ liệu tường minh để linter chắc chắn không phải None
+        val = row[0]
+        ts = row[1]
         if isinstance(val, (int, float)):
             points.append(float(val))
+            ts_str = str(ts) if ts is not None else ""
+            time_part = ts_str.split(" ")[1] if " " in ts_str else ts_str
+            times.append(time_part)
 
     if not points:
-        return Response(content="<p>Waiting for data...</p>", media_type="text/html")
+        err_msg = (
+            f"<p class='padding center-align'>Sự cố #{target_id} "
+            "chưa thu thập dữ liệu nhiệt độ để vẽ đồ thị.</p>"
+        )
+        back_btn = ""
+        if not is_latest:
+            back_btn = (
+                '<div class="center-align">'
+                '<button class="chip primary" hx-get="/api/analytics/graph/latest" '
+                'hx-target=".graph-wrapper" hx-swap="outerHTML">'
+                "Quay lại Xem Trực Tiếp</button></div>"
+            )
 
-    # Thông số vẽ
+        # FIX CHO DÒNG 72: Định nghĩa chuỗi HTMX riêng biệt để tránh lỗi cú pháp f-string
+        if is_latest:
+            htmx_attrs = 'hx-get="/api/analytics/graph/latest" hx-trigger="every 5s" hx-swap="outerHTML"'
+        else:
+            htmx_attrs = 'hx-swap="outerHTML"'
+
+        err_div = (
+            f'<div class="graph-wrapper margin" {htmx_attrs}>{err_msg}{back_btn}</div>'
+        )
+        return Response(content=err_div, media_type="text/html")
+
+    # 3. THIẾT LẬP THÔNG SỐ TOẠ ĐỘ VÀ PADDING (VÙNG AN TOÀN CHO TRỤC)
     w, h = 800, 200
-    min_t, max_t = min(points), max(points)
-    if max_t == min_t:
-        max_t += 1.0
+    p_left, p_right, p_top, p_bottom = 60, 20, 20, 30
+    chart_w = w - p_left - p_right
+    chart_h = h - p_top - p_bottom
 
-    # Tính toán tọa độ (Ngắt dòng để tránh lỗi Ruff E501)
+    min_t, max_t = min(points), max(points)
+    span = (max_t - min_t) if max_t != min_t else 1.0
+
+    # Tính toán tọa độ của đường trendline
     coords: list[str] = []
     num_pts = len(points)
     for i, v in enumerate(points):
-        x = (i / (num_pts - 1)) * w if num_pts > 1 else 0
-        y = h - ((v - min_t) / (max_t - min_t) * h)
+        x = p_left + (i / (num_pts - 1)) * chart_w if num_pts > 1 else p_left
+        y = (h - p_bottom) - ((v - min_t) / span * chart_h)
         coords.append(f"{x},{y}")
 
     points_str = " ".join(coords)
+    x_last = p_left + chart_w if num_pts > 1 else p_left
 
-    # Render SVG String
+    # 4. THIẾT KẾ GRIDLINES VÀ NHÃN TRỤC Y (NHIỆT ĐỘ)
+    axis_color = "#455a64"
+    text_color = "#888888"
+    grid_color = "rgba(255, 255, 255, 0.07)"
+
+    mid_t = (max_t + min_t) / 2.0
+    y_max, y_min = p_top, h - p_bottom
+    y_mid = p_top + chart_h / 2.0
+
+    y_labels = (
+        f'<text x="{p_left - 10}" y="{y_max + 4}" text-anchor="end" fill="{text_color}" font-size="11">{max_t:.1f}°C</text>'
+        f'<text x="{p_left - 10}" y="{y_mid + 4}" text-anchor="end" fill="{text_color}" font-size="11">{mid_t:.1f}°C</text>'
+        f'<text x="{p_left - 10}" y="{y_min + 4}" text-anchor="end" fill="{text_color}" font-size="11">{min_t:.1f}°C</text>'
+    )
+
+    grid_lines = (
+        f'<line x1="{p_left}" y1="{y_max}" x2="{w - p_right}" y2="{y_max}" stroke="{grid_color}" stroke-dasharray="4" />'
+        f'<line x1="{p_left}" y1="{y_mid}" x2="{w - p_right}" y2="{y_mid}" stroke="{grid_color}" stroke-dasharray="4" />'
+        f'<line x1="{p_left}" y1="{y_min}" x2="{w - p_right}" y2="{y_min}" stroke="{axis_color}" stroke-width="1" />'  # Trục hoành X
+        f'<line x1="{p_left}" y1="{y_max}" x2="{p_left}" y2="{y_min}" stroke="{axis_color}" stroke-width="1" />'  # Trục tung Y
+    )
+
+    # 5. THIẾT KẾ NHÃN TRỤC X (MỐC THỜI GIAN)
+    x_labels = ""
+    if len(times) >= 2:
+        start_time = times[0]
+        end_time = times[-1]
+        mid_time = times[len(times) // 2]
+        x_labels = (
+            f'<text x="{p_left}" y="{h - 10}" text-anchor="start" fill="{text_color}" font-size="11">{start_time}</text>'
+            f'<text x="{p_left + chart_w / 2}" y="{h - 10}" text-anchor="middle" fill="{text_color}" font-size="11">{mid_time}</text>'
+            f'<text x="{w - p_right}" y="{h - 10}" text-anchor="end" fill="{text_color}" font-size="11">{end_time}</text>'
+        )
+
+    # 6. DỰNG HÌNH VECTOR (SVG)
     svg_path = (
-        f'<path d="M 0,{h} L {points_str} L {w},{h} Z" fill="rgba(255,61,0,0.1)"/>'
+        f'<path d="M {p_left},{y_min} L {points_str} L {x_last},{y_min} Z" '
+        'fill="rgba(255,61,0,0.1)"/>'
     )
     svg_line = (
         f'<polyline fill="none" stroke="#ff3d00" stroke-width="3" '
         f'stroke-linecap="round" points="{points_str}" />'
     )
 
-    svg = (
+    # Kết hợp các thành phần đồ họa
+    svg_graphics = (
         f'<svg viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg" '
-        f'style="width:100%; height:{h}px; overflow:visible;">'
-        f"{svg_path}{svg_line}"
-        f"</svg>"
+        f'style="width:100%; height:{h}px; overflow:visible; display:block;">'
+        f"{grid_lines}{y_labels}{x_labels}{svg_path}{svg_line}</svg>"
     )
 
-    return Response(content=svg, media_type="text/html")
+    # 7. TRẢ VỀ TRẠNG THÁI KIỂM SOÁT TRIGGER QUA HTML (HATEOAS)
+    if is_latest:
+        # Xem trực tiếp: Tự động poll mỗi 5 giây
+        wrapper = (
+            '<div class="graph-wrapper margin" '
+            'hx-get="/api/analytics/graph/latest" '
+            'hx-trigger="every 5s" hx-swap="outerHTML">'
+            f"{svg_graphics}</div>"
+        )
+    else:
+        # Xem lịch sử: Dừng poll, chèn nút quay về LIVE
+        status_bar = (
+            '<div class="row margin valign" style="gap: 12px; margin-bottom: 16px;">'
+            f'<span class="chip error padding">Đang xem lịch sử vụ #{target_id}</span>'
+            '<button class="chip primary" hx-get="/api/analytics/graph/latest" '
+            'hx-target=".graph-wrapper" hx-swap="outerHTML">'
+            "<i>sensors</i> Xem Trực Tiếp (LIVE)</button></div>"
+        )
+        wrapper = (
+            '<div class="graph-wrapper margin" hx-swap="outerHTML">'
+            f"{status_bar}{svg_graphics}</div>"
+        )
+
+    return Response(content=wrapper, media_type="text/html")

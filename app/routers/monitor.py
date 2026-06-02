@@ -176,8 +176,13 @@ async def get_history_html():
         btn_class = "error" if dest_time == "Active" else "outline"
         btn_label = "LIVE" if dest_time == "Active" else "DONE"
 
+        # Thiết kế hàng bảng clickable chuyển đổi trạng thái đồ thị qua HATEOAS
         row = (
-            f"<tr><td>#{inc_id}</td><td>{start_time}</td><td>{dest_time}</td>"
+            f"<tr style='cursor: pointer;' "
+            f"hx-get='/api/analytics/graph/{inc_id}' "
+            f"hx-target='.graph-wrapper' "
+            f"hx-swap='outerHTML'>"
+            f"<td>#{inc_id}</td><td>{start_time}</td><td>{dest_time}</td>"
             f"<td>{peak_temp}°C</td><td>"
             f"<button class='chip {btn_class}'>{btn_label}</button></td></tr>"
         )
