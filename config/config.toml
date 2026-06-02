@@ -1,24 +1,45 @@
-# SYSTEM OPERATIONAL MODE
-# Options:
-#   "auto"   : Enables adaptive thresholding based on moving averages per session.
-#   "manual" : Forces the system to use static, predefined threshold limits.
+###! CORE SYSTEM DIRECTIVES
+# High-level operational state of the entire monitoring stack.
+# "auto"   : [Recommended] Enables Dynamic Moving Average (DMA) logic.
+# "manual" : Fallback to hard-coded industrial safety standards.
 mode = "auto"
 
-# ADAPTIVE ALGORITHM PARAMETERS
-# Used only when mode = "auto" to prevent false positives during extreme weather (e.g., El Niño).
-# Formula: DYNAMIC_TEMP_THRESHOLD = Session_Average_Temperature + temp_offset
+##! ADAPTIVE LOGIC KERNELS (ALGORITHM BRAIN)
+# Parameters governing the session-based learning behavior.
+
+#! COMPUTATIONAL INSTRUCTION: 
+#! DYNAMIC_THRESHOLD = (Σ Temp[window_size] / window_size) + temp_offset
 temp_offset = 10
 
-# STATIC FALLBACK / MANUAL THRESHOLDS
-# Used as explicit limits in "manual" mode, or as fallbacks in "auto" mode if logs are empty.
+#! SLIDING WINDOW: Number of samples (2s each) for Moving Average calculation.
+# 30 samples = 60-second observation window.
+window_size = 30
+
+#! HYSTERESIS: Anti-flicker buffer in Degrees Celsius.
+# Prevents state oscillation when temp floats exactly at threshold.
+hysteresis = 2
+
+# ---------------------------------------------------------
+
+###! STATIC FALLBACK & EMERGENCY LIMITS
+# Used as explicit limits in "manual" mode or as cold-start fallbacks.
 [threshold.default]
 
-# Temperature threshold in Degrees Celsius
-# Set to 45°C to sit safely above hot summer ambient room temperatures (~42°C),
-# ensuring early detection at the initial stage of material combustion.
+# Temperature threshold in Degrees Celsius.
+# Set to 45°C to sit above extreme summer ambient (e.g., El Niño ~42°C).
 temp = 45
 
-# Smoke threshold (Raw ADC value from MQ-2 sensor)
-# Normal ambient air ranges from 80 to 150. A threshold of 300 ensures the 
-# presence of dense smoke particulate before triggering the alarm state.
+# Smoke density (MQ-2 Raw ADC).
+# Normal air: 80-150. Fire density: >300.
 smoke = 300
+
+# ---------------------------------------------------------
+
+###! UI RENDERER CONTEXT (SERVER-DRIVEN)
+# Graphics parameters for the Backend-generated SVG engine.
+[ui.graph]
+width = 800
+height = 200
+max_points = 50
+stroke_color = "#ff3d00"
+fill_opacity = 0.1
