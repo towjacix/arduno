@@ -49,6 +49,7 @@ async def get_incident_graph(incident_id: str):
         ts = row[1]
         if isinstance(val, (int, float)):
             points.append(float(val))
+            # Rút gọn chuỗi timestamp YYYY-MM-DD HH:MM:SS về dạng HH:MM:SS
             ts_str = str(ts) if ts is not None else ""
             time_part = ts_str.split(" ")[1] if " " in ts_str else ts_str
             times.append(time_part)
@@ -86,8 +87,6 @@ async def get_incident_graph(incident_id: str):
     min_t, max_t = min(points), max(points)
 
     # [THUẬT TOÁN LÀM PHẲNG ĐỒ THỊ]
-    # Thiết lập khoảng cách đo (span) tối thiểu là 40°C để đồ thị không bị dốc đứng
-    # và khống chế cận dưới không xuống dưới mức nhiệt phòng tiêu chuẩn (20°C).
     MIN_SPAN = 40.0
     current_span = max_t - min_t
     if current_span < MIN_SPAN:
@@ -110,8 +109,8 @@ async def get_incident_graph(incident_id: str):
 
     # 4. THIẾT KẾ GRIDLINES VÀ NHÃN TRỤC Y (NHIỆT ĐỘ)
     axis_color = "#455a64"
-    text_color = "#888888"
-    grid_color = "rgba(255, 255, 255, 0.07)"
+    text_color = "#9e9e9e"  # Tăng độ sáng chữ nhãn từ #888888 lên #9e9e9e
+    grid_color = "rgba(255, 255, 255, 0.22)"  # Tăng mạnh độ rõ nét từ 0.07 lên 0.22
 
     mid_t = (max_t + min_t) / 2.0
     y_max, y_min = p_top, h - p_bottom
@@ -123,36 +122,48 @@ async def get_incident_graph(incident_id: str):
         f'<text x="{p_left - 10}" y="{y_min + 4}" text-anchor="end" fill="{text_color}" font-size="11">{min_t:.1f}°C</text>'
     )
 
-    grid_lines = (
-        f'<line x1="{p_left}" y1="{y_max}" x2="{w - p_right}" y2="{y_max}" stroke="{grid_color}" stroke-dasharray="4" />'
-        f'<line x1="{p_left}" y1="{y_mid}" x2="{w - p_right}" y2="{y_mid}" stroke="{grid_color}" stroke-dasharray="4" />'
-        f'<line x1="{p_left}" y1="{y_min}" x2="{w - p_right}" y2="{y_min}" stroke="{axis_color}" stroke-width="1" />'  # Trục hoành X
-        f'<line x1="{p_left}" y1="{y_max}" x2="{p_left}" y2="{y_min}" stroke="{axis_color}" stroke-width="1" />'  # Trục tung Y
-    )
-
-    # 5. THIẾT KẾ NHÃN TRỤC X (MỐC THỜI GIAN)
+    # 5. THIẾT KẾ NHÃN TRỤC X VÀ ĐƯỜNG LƯỚI DỌC (TIME GRIDLINES)
     x_labels = ""
+    vertical_grid = ""
     if len(times) >= 2:
         start_time = times[0]
         end_time = times[-1]
         mid_time = times[len(times) // 2]
+
+        x_mid = p_left + chart_w / 2.0
+        x_end = w - p_right
+
         x_labels = (
             f'<text x="{p_left}" y="{h - 10}" text-anchor="start" fill="{text_color}" font-size="11">{start_time}</text>'
-            f'<text x="{p_left + chart_w / 2}" y="{h - 10}" text-anchor="middle" fill="{text_color}" font-size="11">{mid_time}</text>'
-            f'<text x="{w - p_right}" y="{h - 10}" text-anchor="end" fill="{text_color}" font-size="11">{end_time}</text>'
+            f'<text x="{x_mid}" y="{h - 10}" text-anchor="middle" fill="{text_color}" font-size="11">{mid_time}</text>'
+            f'<text x="{x_end}" y="{h - 10}" text-anchor="end" fill="{text_color}" font-size="11">{end_time}</text>'
         )
+
+        # Tạo lưới đứt nét dọc chỉ điểm mốc thời gian
+        vertical_grid = (
+            f'<line x1="{x_mid}" y1="{y_max}" x2="{x_mid}" y2="{y_min}" stroke="{grid_color}" stroke-dasharray="4" />'
+            f'<line x1="{x_end}" y1="{y_max}" x2="{x_end}" y2="{y_min}" stroke="{grid_color}" stroke-dasharray="4" />'
+        )
+
+    grid_lines = (
+        f'<line x1="{p_left}" y1="{y_max}" x2="{w - p_right}" y2="{y_max}" stroke="{grid_color}" stroke-dasharray="4" />'
+        f'<line x1="{p_left}" y1="{y_mid}" x2="{w - p_right}" y2="{y_mid}" stroke="{grid_color}" stroke-dasharray="4" />'
+        f'<line x1="{p_left}" y1="{y_min}" x2="{w - p_right}" y2="{y_min}" stroke="{axis_color}" stroke-width="1.2" />'  # Trục hoành X
+        f'<line x1="{p_left}" y1="{y_max}" x2="{p_left}" y2="{y_min}" stroke="{axis_color}" stroke-width="1.2" />'  # Trục tung Y
+        f"{vertical_grid}"
+    )
 
     # 6. DỰNG HÌNH VECTOR (SVG)
     svg_path = (
         f'<path d="M {p_left},{y_min} L {points_str} L {x_last},{y_min} Z" '
         'fill="rgba(255,61,0,0.1)"/>'
     )
-    # Nét hẹp: stroke-width giảm từ 3 xuống còn 1.8 để tăng độ mảnh và tinh tế
     svg_line = (
         f'<polyline fill="none" stroke="#ff3d00" stroke-width="1.8" '
         f'stroke-linecap="round" points="{points_str}" />'
     )
 
+    # Kết hợp các thành phần đồ họa
     svg_graphics = (
         f'<svg viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg" '
         f'style="width:100%; height:{h}px; overflow:visible; display:block;">'
