@@ -1,0 +1,24 @@
+# SYSTEM OPERATIONAL MODE
+# Options:
+#   "auto"   : Enables adaptive thresholding based on moving averages per session.
+#   "manual" : Forces the system to use static, predefined threshold limits.
+mode = "auto"
+
+# ADAPTIVE ALGORITHM PARAMETERS
+# Used only when mode = "auto" to prevent false positives during extreme weather (e.g., El Niño).
+# Formula: DYNAMIC_TEMP_THRESHOLD = Session_Average_Temperature + temp_offset
+temp_offset = 10
+
+# STATIC FALLBACK / MANUAL THRESHOLDS
+# Used as explicit limits in "manual" mode, or as fallbacks in "auto" mode if logs are empty.
+[threshold.default]
+
+# Temperature threshold in Degrees Celsius
+# Set to 45°C to sit safely above hot summer ambient room temperatures (~42°C),
+# ensuring early detection at the initial stage of material combustion.
+temp = 45
+
+# Smoke threshold (Raw ADC value from MQ-2 sensor)
+# Normal ambient air ranges from 80 to 150. A threshold of 300 ensures the 
+# presence of dense smoke particulate before triggering the alarm state.
+smoke = 300

@@ -1,0 +1,10 @@
+__pycache__/
+.pytest_cache/
+.vercel/
+*.pyc
+*.pyo
+*.pyd
+.env
+.arduino_config.lua
+Pipfile
+Pipfile.lock
