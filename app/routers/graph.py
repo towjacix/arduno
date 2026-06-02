@@ -45,7 +45,6 @@ async def get_incident_graph(incident_id: str):
                 )
                 res = await database.db.execute(q, [target_id])
             else:
-                # Fallback nếu rỗng
                 res = await database.db.execute(
                     "SELECT temp, timestamp FROM ("
                     "  SELECT temp, timestamp FROM burning_logs "
@@ -64,7 +63,7 @@ async def get_incident_graph(incident_id: str):
             )
             res = await database.db.execute(q)
     else:
-        # XEM LỊCH SỬ TĨNH: Vẽ sự cố cụ thể đã chọn, không quan tâm trạng thái hiện tại
+        # XEM LỊCH SỬ TĨNH: Vẽ sự cố cụ thể đã chọn
         target_id = int(incident_id)
         q = (
             "SELECT temp, timestamp FROM burning_logs "
@@ -72,7 +71,7 @@ async def get_incident_graph(incident_id: str):
         )
         res = await database.db.execute(q, [target_id])
 
-        # Kiểm tra xem sự cố cụ thể này có đang Active (LIVE) hay không
+        # Kiểm tra xem sự cố cụ thể này có đang Active hay không
         id_res = await database.db.execute(
             "SELECT end_time FROM incidents WHERE incident_id = ?", [target_id]
         )
@@ -104,9 +103,9 @@ async def get_incident_graph(incident_id: str):
             )
 
         if is_latest:
-            htmx_attrs = 'hx-get="/api/analytics/graph/latest" hx-trigger="every 5s" hx-swap="outerHTML"'
+            htmx_attrs = f'hx-get="/api/analytics/graph/latest?zoom={zoom}" hx-trigger="every 5s" hx-swap="outerHTML"'
         elif is_active:
-            htmx_attrs = f'hx-get="/api/analytics/graph/{target_id}" hx-trigger="every 5s" hx-swap="outerHTML"'
+            htmx_attrs = f'hx-get="/api/analytics/graph/{target_id}?zoom={zoom}" hx-trigger="every 5s" hx-swap="outerHTML"'
         else:
             htmx_attrs = 'hx-swap="outerHTML"'
 
@@ -115,7 +114,7 @@ async def get_incident_graph(incident_id: str):
         )
         return Response(content=err_div, media_type="text/html")
 
-    # 4. THIẾT LẬP THÔNG SỐ TOẠ ĐỘ VÀ PADDING (VÙNG AN TOÀN CHO TRỤC)
+    # 4. THIẾT LẬP THÔNG SỐ TOẠ ĐỘ VÀ PADDING
     w, h = 800, 200
     p_left, p_right, p_top, p_bottom = 60, 20, 20, 30
     chart_w = w - p_left - p_right
@@ -123,8 +122,9 @@ async def get_incident_graph(incident_id: str):
 
     min_t, max_t = min(points), max(points)
 
-    # [THUẬT TOÁN LÀM PHẲNG ĐỒ THỊ]
-    MIN_SPAN = 40.0
+    # [NÂNG CẤP: THUẬT TOÁN CO GIÃN ĐỒ THỊ CHỦ ĐỘNG]
+    # detail: dải đo hẹp 5°C để soi rõ biến động nhỏ. flat: dải đo rộng 40°C để làm phẳng.
+    MIN_SPAN = 5.0 if zoom == "detail" else 40.0
     current_span = max_t - min_t
     if current_span < MIN_SPAN:
         diff = MIN_SPAN - current_span
@@ -159,7 +159,7 @@ async def get_incident_graph(incident_id: str):
     time_end = times[-1]
     y_end = (h - p_bottom) - ((t_end - min_t) / span * chart_h)
 
-    # 6. THUẬT TOÁN CHỐNG ĐÈ CHỮ THÔNG MINH (LABEL DE-CLUTTERING)
+    # 6. THUẬT TOÁN CHỐNG ĐÈ CHỮ THÔNG MINH
     axis_color = "#455a64"
     text_color = "#9e9e9e"
     grid_color = "rgba(255, 255, 255, 0.22)"
@@ -171,7 +171,7 @@ async def get_incident_graph(incident_id: str):
     proj_lines_list = []
     data_nodes_list = []
 
-    # Điểm 1 (Bắt đầu): Luôn vẽ nhãn Y và chấm đỏ
+    # Điểm 1 (Bắt đầu)
     y_labels_list.append(
         f'<text x="{p_left - 10}" y="{y_start + 4}" text-anchor="end" fill="{text_color}" font-size="11">{t_start:.1f}°C</text>'
     )
@@ -179,7 +179,7 @@ async def get_incident_graph(incident_id: str):
         f'<circle cx="{p_left}" cy="{y_start}" r="3" fill="#ff3d00" />'
     )
 
-    # Điểm 2 (Giữa): Kiểm tra khoảng cách đè chữ
+    # Điểm 2 (Giữa)
     if abs(y_mid - y_start) >= MIN_LABEL_GAP:
         y_labels_list.append(
             f'<text x="{p_left - 10}" y="{y_mid + 4}" text-anchor="end" fill="{text_color}" font-size="11">{t_mid:.1f}°C</text>'
@@ -188,7 +188,6 @@ async def get_incident_graph(incident_id: str):
             f'<line x1="{p_left}" y1="{y_mid}" x2="{x_mid}" y2="{y_mid}" stroke="{grid_color}" stroke-dasharray="4" />'
         )
 
-    # Luôn dóng dọc mốc thời gian dưới trục X
     proj_lines_list.append(
         f'<line x1="{x_mid}" y1="{y_min}" x2="{x_mid}" y2="{y_mid}" stroke="{grid_color}" stroke-dasharray="4" />'
     )
@@ -196,7 +195,7 @@ async def get_incident_graph(incident_id: str):
         f'<circle cx="{x_mid}" cy="{y_mid}" r="2.5" fill="#ff3d00" />'
     )
 
-    # Điểm 3 (Kết thúc): Kiểm tra khoảng cách đè chữ
+    # Điểm 3 (Kết thúc)
     if abs(y_end - y_start) >= MIN_LABEL_GAP and abs(y_end - y_mid) >= MIN_LABEL_GAP:
         y_labels_list.append(
             f'<text x="{p_left - 10}" y="{y_end + 4}" text-anchor="end" fill="{text_color}" font-size="11">{t_end:.1f}°C</text>'
@@ -212,11 +211,11 @@ async def get_incident_graph(incident_id: str):
         f'<circle cx="{x_last}" cy="{y_end}" r="2.5" fill="#ff3d00" />'
     )
 
-    # Gộp chuỗi SVG thành phần
     y_labels = "".join(y_labels_list)
     proj_lines = "".join(proj_lines_list)
     data_nodes = "".join(data_nodes_list)
 
+    # Trục chính và nhãn
     axes = (
         f'<line x1="{p_left}" y1="{p_top}" x2="{p_left}" y2="{y_min}" stroke="{axis_color}" stroke-width="1.2" />'
         f'<line x1="{p_left}" y1="{y_min}" x2="{w - p_right}" y2="{y_min}" stroke="{axis_color}" stroke-width="1.2" />'
@@ -228,7 +227,7 @@ async def get_incident_graph(incident_id: str):
         f'<text x="{x_last}" y="{h - 10}" text-anchor="end" fill="{text_color}" font-size="11">{time_end}</text>'
     )
 
-    # 7. DỰNG HÌNH VECTOR (SVG)
+    # 7. DỰNG HÌNH VECTOR (SVG) - Sửa đổi thứ tự vẽ: vẽ svg_path trước để tránh che mờ nét đứt
     svg_path = (
         f'<path d="M {p_left},{y_min} L {points_str} L {x_last},{y_min} Z" '
         'fill="rgba(255,61,0,0.1)"/>'
@@ -241,20 +240,28 @@ async def get_incident_graph(incident_id: str):
     svg_graphics = (
         f'<svg viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg" '
         f'style="width:100%; height:{h}px; overflow:visible; display:block;">'
-        f"{axes}{proj_lines}{y_labels}{x_labels}{svg_path}{svg_line}{data_nodes}</svg>"
+        f"{axes}{svg_path}{proj_lines}{y_labels}{x_labels}{svg_line}{data_nodes}</svg>"
     )
 
-    # 8. TRẢ VỀ TRẠNG THÁI KIỂM SOÁT TRIGGER QUA HTML (HATEOAS)
+    # 8. THANH ĐIỀU HƯỚNG ZOOM ĐỘNG (Bằng Beer CSS & HTMX)
+    class_flat = "primary" if zoom == "flat" else "outline"
+    class_detail = "primary" if zoom == "detail" else "outline"
+    zoom_bar = (
+        f'<div class="row" style="gap: 6px; justify-content: flex-end; margin-bottom: 8px;">'
+        f'<button class="chip {class_flat}" hx-get="/api/analytics/graph/{incident_id}?zoom=flat" hx-target=".graph-wrapper" hx-swap="outerHTML">Mặc định</button>'
+        f'<button class="chip {class_detail}" hx-get="/api/analytics/graph/{incident_id}?zoom=detail" hx-target=".graph-wrapper" hx-swap="outerHTML">Phóng to (Zoom)</button>'
+        f"</div>"
+    )
+
+    # 9. TRẢ VỀ TRẠNG THÁI KIỂM SOÁT TRIGGER QUA HTML (HATEOAS)
     if is_latest:
-        # TRẠNG THÁI 1: LIVE Ambient (Nhiệt độ phòng) -> Poll mỗi 5 giây
         wrapper = (
-            '<div class="graph-wrapper margin" '
-            'hx-get="/api/analytics/graph/latest" '
-            'hx-trigger="every 5s" hx-swap="outerHTML">'
-            f"{svg_graphics}</div>"
+            f'<div class="graph-wrapper margin" '
+            f'hx-get="/api/analytics/graph/latest?zoom={zoom}" '
+            f'hx-trigger="every 5s" hx-swap="outerHTML">'
+            f"{zoom_bar}{svg_graphics}</div>"
         )
     elif is_active:
-        # TRẠNG THÁI 2: LIVE Incident (Sự cố đang diễn ra) -> Vẫn Poll mỗi 5 giây nhưng là hx-get chính sự cố đó!
         status_bar = (
             '<div class="row margin valign" style="gap: 12px; margin-bottom: 16px;">'
             f'<span class="chip error padding blinking">Sự cố #{target_id} ĐANG DIỄN RA (LIVE)</span>'
@@ -264,12 +271,11 @@ async def get_incident_graph(incident_id: str):
         )
         wrapper = (
             f'<div class="graph-wrapper margin" '
-            f'hx-get="/api/analytics/graph/{target_id}" '
+            f'hx-get="/api/analytics/graph/{target_id}?zoom={zoom}" '
             f'hx-trigger="every 5s" hx-swap="outerHTML">'
-            f"{status_bar}{svg_graphics}</div>"
+            f"{status_bar}{zoom_bar}{svg_graphics}</div>"
         )
     else:
-        # TRẠNG THÁI 3: Lịch sử tĩnh (DONE) -> Dừng hoàn toàn Polling
         status_bar = (
             '<div class="row margin valign" style="gap: 12px; margin-bottom: 16px;">'
             f'<span class="chip error padding">Lịch sử sự cố #{target_id}</span>'
@@ -278,8 +284,8 @@ async def get_incident_graph(incident_id: str):
             "<i>sensors</i> Trở về Giám Sát Phòng (Ambient)</button></div>"
         )
         wrapper = (
-            '<div class="graph-wrapper margin" hx-swap="outerHTML">'
-            f"{status_bar}{svg_graphics}</div>"
+            f'<div class="graph-wrapper margin" hx-swap="outerHTML">'
+            f"{status_bar}{zoom_bar}{svg_graphics}</div>"
         )
 
     return Response(content=wrapper, media_type="text/html")
