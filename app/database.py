@@ -1,14 +1,18 @@
 import os
 
-from libsql_client import Client, create_client as _create_client
+from libsql_client import Client, create_client
 
 
-# Lấy thông số từ biến môi trường
+# URL phải được cấu hình là https://... trong Vercel Environment Variables
 TURSO_URL: str = os.getenv("TURSO_DATABASE_URL", "")
 TURSO_TOKEN: str = os.getenv("TURSO_AUTH_TOKEN", "")
 
-# Xuất bản hàm này ra để index.py có thể thấy
-create_client = _create_client
-
-# Khởi tạo db là None. Sử dụng Optional để Type Checker không than phiền
+# Khởi tạo db là None
 db: Client = None  # type: ignore
+
+
+def init_db():
+    global db
+    # Nếu URL bắt đầu bằng https://, libsql-client sẽ tự động dùng HTTP API
+    # Điều này tránh được lỗi WSS Handshake (WebSocket) trên Serverless
+    db = create_client(url=TURSO_URL, auth_token=TURSO_TOKEN)
