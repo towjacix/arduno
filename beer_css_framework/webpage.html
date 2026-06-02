@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lab Monitor | Cloud-Native IoT</title>
+
+    <!-- Beer CSS: Framework UI chuẩn Material Design 3 (Google) -->
+    <link
+      href="https://cdn.jsdelivr.net/npm/beercss@3.5.1/dist/cdn/beer.min.css"
+      rel="stylesheet"
+    />
+    <script
+      type="module"
+      src="https://cdn.jsdelivr.net/npm/beercss@3.5.1/dist/cdn/beer.min.js"
+    ></script>
+
+    <!-- HTMX: Trái tim của hệ thống - Giúp nạp dữ liệu không cần JavaScript -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+
+    <style>
+      :root {
+        --primary: #ff3d00;
+        --secondary: #455a64;
+      }
+      body {
+        background-color: #121212;
+      }
+      .graph-wrapper svg {
+        width: 100%;
+        height: auto;
+        display: block;
+      }
+      /* Hiệu ứng nhấp nháy khi có cảnh báo */
+      .critical-bg {
+        animation: blinker 1.5s linear infinite;
+        background-color: #b71c1c !important;
+      }
+      @keyframes blinker {
+        50% {
+          opacity: 0.7;
+        }
+      }
+    </style>
+  </head>
+
+  <body class="dark">
+    <!-- Thanh điều hướng -->
+    <header class="primary shadow">
+      <nav>
+        <button class="circle transparent">
+          <i>local_fire_department</i>
+        </button>
+        <h5 class="max">LAB SAFETY MONITOR</h5>
+        <div class="field round fill prefix margin">
+          <i class="front">sensors</i>
+          <div class="max">Phòng thí nghiệm số 1</div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="responsive padding">
+      <!-- TẦNG 1: CHỈ SỐ NHANH (Sử dụng HTMX Polling 2s) -->
+      <div class="grid">
+        <!-- Thẻ Nhiệt độ -->
+        <div class="s12 m4">
+          <article
+            class="border round padding"
+            hx-get="/api/status"
+            hx-trigger="load, every 2s"
+            hx-select=".temp-data"
+            hx-swap="innerHTML"
+          >
+            <div class="temp-data">
+              <div class="row">
+                <i class="orange-text">thermostat</i>
+                <div class="max">
+                  <h6>Nhiệt độ</h6>
+                  <h4>--°C</h4>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <!-- Thẻ Khói -->
+        <div class="s12 m4">
+          <article
+            class="border round padding"
+            hx-get="/api/status"
+            hx-trigger="load, every 2s"
+            hx-select=".smoke-data"
+            hx-swap="innerHTML"
+          >
+            <div class="smoke-data">
+              <div class="row">
+                <i class="grey-text">cloud</i>
+                <div class="max">
+                  <h6>Mật độ khói</h6>
+                  <h4>-- PPM</h4>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <!-- Thẻ Ngưỡng Thích Ứng (AI Threshold) -->
+        <div class="s12 m4">
+          <article
+            class="border round padding"
+            hx-get="/api/status"
+            hx-trigger="load, every 2s"
+            hx-select=".threshold-data"
+            hx-swap="innerHTML"
+          >
+            <div class="threshold-data">
+              <div class="row">
+                <i class="blue-text">psychology</i>
+                <div class="max">
+                  <h6>Ngưỡng tự động</h6>
+                  <h4>--°C</h4>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <div class="space"></div>
+
+      <!-- TẦNG 2: BIỂU ĐỒ SVG (Kéo trực tiếp từ Server-side renderer) -->
+      <div class="grid">
+        <div class="s12">
+          <article class="border round padding">
+            <div class="row">
+              <i class="primary-text">timeline</i>
+              <div class="max">
+                <h5>Diễn biến sự cố (Thời gian thực)</h5>
+              </div>
+              <button class="chip primary">LIVE</button>
+            </div>
+
+            <!-- Vùng vẽ đồ thị: Backend trả về chuỗi <svg>...</svg> -->
+            <div
+              class="graph-wrapper margin"
+              hx-get="/api/analytics/graph/latest"
+              hx-trigger="load, every 5s"
+              hx-swap="innerHTML"
+            >
+              <div class="center-align padding">
+                <progress class="circle"></progress>
+                <p>Đang dựng đồ thị từ Edge Database...</p>
+              </div>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <div class="space"></div>
+
+      <!-- TẦNG 3: NHẬT KÝ SỰ CỐ -->
+      <div class="grid">
+        <div class="s12">
+          <article class="border round">
+            <div class="row padding">
+              <i class="primary-text">history</i>
+              <h5 class="max">Lịch sử cảnh báo</h5>
+              <button
+                class="circle transparent"
+                hx-get="/api/history"
+                hx-target="#history-body"
+              >
+                <i>refresh</i>
+              </button>
+            </div>
+            <div class="table-container">
+              <table class="border left-align">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Bắt đầu</th>
+                    <th>Kết thúc</th>
+                    <th>Đỉnh nhiệt</th>
+                    <th>Hành động</th>
+                  </tr>
+                </thead>
+                <tbody
+                  id="history-body"
+                  hx-get="/api/history"
+                  hx-trigger="load"
+                >
+                  <!-- Dữ liệu lịch sử đổ vào đây -->
+                </tbody>
+              </table>
+            </div>
+          </article>
+        </div>
+      </div>
+    </main>
+
+    <footer class="padding center-align transparent">
+      <div class="row center-align">
+        <img
+          src="https://turso.tech/symbol-sdk.svg"
+          style="height: 20px"
+          class="margin"
+        />
+        <span class="italic">Powered by Turso Edge DB & Vercel Serverless</span>
+      </div>
+    </footer>
+  </body>
+</html>
