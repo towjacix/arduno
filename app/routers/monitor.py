@@ -142,7 +142,7 @@ async def get_status_html():
     icon_class = "" if status == "critical" else "blue-text"
     status_icon = "warning" if status == "critical" else "check_circle"
 
-    # Gộp toàn bộ 3 thẻ chỉ số nhanh thành một cấu trúc Grid đồng bộ tuyệt đối chiều cao (min-height: 105px) [7]
+    # [NÂNG CẤP] Ép chiều cao min-height: 105px đồng bộ cho cả 3 hộp để mười phân vẹn mười [7]
     return HTMLResponse(
         content=f"""
     <div class="grid" id="status-grid" hx-get="/api/status" hx-trigger="every 2s" hx-swap="outerHTML">
@@ -191,37 +191,32 @@ async def get_status_html():
 
 @router.get("/api/history", response_class=HTMLResponse)
 async def get_history_html(page: int = 1):
-    """Lấy lịch sử cảnh báo có phân trang động (Sử dụng Polling giãn cách 10 giây)."""
+    """Lấy lịch sử cảnh báo phân trang bóc tách trực tiếp trên RAM Python."""
     if database.db is None:
         return HTMLResponse("")
 
     page = max(1, page)
-    PAGE_SIZE = 5  # Giới hạn 5 bản ghi mỗi trang để triệt tiêu việc cuộn (Scroll)
+    PAGE_SIZE = 5
 
-    # 1. Tính toán tổng số bản ghi và tổng số trang
-    count_res = await database.db.execute("SELECT COUNT(*) FROM incidents")
-    total_items = 0
-    if count_res.rows:
-        raw_count = count_res.rows[0][0]
-        total_items = int(raw_count) if isinstance(raw_count, int) else 0
-
-    total_pages = max(1, (total_items + PAGE_SIZE - 1) // PAGE_SIZE)
-    page = min(page, total_pages)
-    offset = (page - 1) * PAGE_SIZE
-
-    # 2. Truy vấn dữ liệu phân trang
-    # Sử dụng F-string để truyền trực tiếp LIMIT và OFFSET giúp giải quyết triệt để lỗi ép kiểu của SQLite Driver [9]
-    query = (
-        "SELECT incident_id, start_time, end_time, peak_temp "
-        f"FROM incidents ORDER BY incident_id DESC LIMIT {PAGE_SIZE} OFFSET {offset}"
-    )
+    # 1. Truy vấn TOÀN BỘ dữ liệu sự cố (Sắp xếp lớn nhất lên đầu)
+    # Bỏ qua hoàn toàn cơ chế phân trang của SQL để tránh lỗi Driver LibSQL [9]
+    query = "SELECT incident_id, start_time, end_time, peak_temp FROM incidents ORDER BY incident_id DESC"
     res = await database.db.execute(query)
 
+    total_items = len(res.rows)
+    total_pages = max(1, (total_items + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = min(page, total_pages)
+
+    offset = (page - 1) * PAGE_SIZE
+
+    # 2. Thực hiện Phân trang (Slicing) trực tiếp trên RAM của Python - Không thể lỗi!
+    paginated_rows = res.rows[offset : offset + PAGE_SIZE]
+
     rows = []
-    for r in res.rows:
+    for r in paginated_rows:
         inc_id_raw, start_time_raw, end_time_raw, peak_temp_raw = r[0], r[1], r[2], r[3]
 
-        # Viết khối lệnh rẽ nhánh an toàn để ép kiểu tuyệt đối
+        # Ép kiểu tuyệt đối an toàn
         inc_id = int(inc_id_raw) if isinstance(inc_id_raw, int) else 0
         start_time = str(start_time_raw) if start_time_raw is not None else ""
         dest_time = str(end_time_raw) if end_time_raw is not None else ""
@@ -233,7 +228,6 @@ async def get_history_html(page: int = 1):
         btn_class = "error" if dest_time == "Active" else "outline"
         btn_label = "LIVE" if dest_time == "Active" else "DONE"
 
-        # Thiết kế hàng bảng clickable chuyển đổi trạng thái đồ thị qua HATEOAS
         row = (
             f"<tr style='cursor: pointer;' "
             f"hx-get='/api/analytics/graph/{inc_id}' "
