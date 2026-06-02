@@ -1,5 +1,3 @@
-from typing import cast
-
 from fastapi import APIRouter, Response
 
 import app.database as database
@@ -15,32 +13,37 @@ async def get_incident_graph(incident_id: str):
 
     target_id: int = 0
     is_latest = incident_id == "latest"
+    is_active = False
 
-    # 1. Xác định Incident ID cần kết xuất đồ họa
+    # 1. PHÂN LUỒNG TRUY VẤN LOGIC (REAL-TIME AMBIENT VS INCIDENTS)
     if is_latest:
-        id_q = "SELECT incident_id FROM incidents ORDER BY incident_id DESC LIMIT 1"
-        id_res = await database.db.execute(id_q)
-        if not id_res.rows:
-            empty_div = (
-                '<div class="graph-wrapper margin" '
-                'hx-get="/api/analytics/graph/latest" '
-                'hx-trigger="every 5s" hx-swap="outerHTML">'
-                '<p class="center-align padding">Hệ thống đang hoạt động an toàn. '
-                "Chưa có sự cố để vẽ đồ thị.</p></div>"
-            )
-            return Response(content=empty_div, media_type="text/html")
-        target_id = int(cast(int, id_res.rows[0][0]))
+        # Chế độ LIVE Ambient: Luôn vẽ nhiệt độ phòng thời gian thực (incident_id = 0)
+        target_id = 0
+        q = (
+            "SELECT temp, timestamp FROM ("
+            "  SELECT temp, timestamp FROM burning_logs "
+            "  WHERE incident_id = 0 "
+            "  ORDER BY id DESC LIMIT 30"
+            ") ORDER BY timestamp ASC"
+        )
+        res = await database.db.execute(q)
     else:
+        # Chế độ xem sự cố cụ thể (Lịch sử hoặc Đang diễn ra)
         target_id = int(incident_id)
+        q = (
+            "SELECT temp, timestamp FROM burning_logs "
+            "WHERE incident_id = ? ORDER BY timestamp ASC"
+        )
+        res = await database.db.execute(q, [target_id])
 
-    # 2. Truy vấn dữ liệu nhiệt độ và mốc thời gian tương ứng
-    q = (
-        "SELECT temp, timestamp FROM burning_logs "
-        "WHERE incident_id = ? ORDER BY timestamp ASC"
-    )
-    res = await database.db.execute(q, [target_id])
+        # Kiểm tra xem sự cố cụ thể này có đang Active (LIVE) hay không
+        id_res = await database.db.execute(
+            "SELECT end_time FROM incidents WHERE incident_id = ?", [target_id]
+        )
+        if id_res.rows:
+            is_active = str(id_res.rows[0][0]) == "Active"
 
-    # Ép kiểu và tách mảng an toàn (Thu hẹp kiểu dữ liệu cho Basedpyright)
+    # 2. ÉP KIỂU VÀ CHUẨN HÓA DỮ LIỆU (Type Safety cho Basedpyright)
     points: list[float] = []
     times: list[str] = []
 
@@ -49,27 +52,26 @@ async def get_incident_graph(incident_id: str):
         ts = row[1]
         if isinstance(val, (int, float)):
             points.append(float(val))
-            # Rút gọn chuỗi timestamp YYYY-MM-DD HH:MM:SS về dạng HH:MM:SS
             ts_str = str(ts) if ts is not None else ""
             time_part = ts_str.split(" ")[1] if " " in ts_str else ts_str
             times.append(time_part)
 
     if not points:
-        err_msg = (
-            f"<p class='padding center-align'>Sự cố #{target_id} "
-            "chưa thu thập dữ liệu nhiệt độ để vẽ đồ thị.</p>"
-        )
+        err_msg = "<p class='padding center-align'>Chưa có dữ liệu đo đạc.</p>"
         back_btn = ""
         if not is_latest:
             back_btn = (
                 '<div class="center-align">'
                 '<button class="chip primary" hx-get="/api/analytics/graph/latest" '
                 'hx-target=".graph-wrapper" hx-swap="outerHTML">'
-                "Quay lại Xem Trực Tiếp</button></div>"
+                "<i>sensors</i> Trở về Giám Sát Phòng (Ambient)</button></div>"
             )
 
+        # Định nghĩa htmx_attrs an toàn cho Vỏ bọc lỗi
         if is_latest:
             htmx_attrs = 'hx-get="/api/analytics/graph/latest" hx-trigger="every 5s" hx-swap="outerHTML"'
+        elif is_active:
+            htmx_attrs = f'hx-get="/api/analytics/graph/{target_id}" hx-trigger="every 5s" hx-swap="outerHTML"'
         else:
             htmx_attrs = 'hx-swap="outerHTML"'
 
@@ -109,51 +111,58 @@ async def get_incident_graph(incident_id: str):
 
     # 4. THIẾT KẾ GRIDLINES VÀ NHÃN TRỤC Y (NHIỆT ĐỘ)
     axis_color = "#455a64"
-    text_color = "#9e9e9e"  # Tăng độ sáng chữ nhãn từ #888888 lên #9e9e9e
-    grid_color = "rgba(255, 255, 255, 0.22)"  # Tăng mạnh độ rõ nét từ 0.07 lên 0.22
+    text_color = "#9e9e9e"
+    grid_color = "rgba(255, 255, 255, 0.22)"
 
-    mid_t = (max_t + min_t) / 2.0
     y_max, y_min = p_top, h - p_bottom
-    y_mid = p_top + chart_h / 2.0
+
+    # Khởi tạo tọa độ cho 3 điểm dữ liệu chính
+    mid_idx = num_pts // 2
+    t_start = points[0]
+    time_start = times[0]
+    y_start = (h - p_bottom) - ((t_start - min_t) / span * chart_h)
+
+    t_mid = points[mid_idx]
+    time_mid = times[mid_idx]
+    x_mid = p_left + (mid_idx / (num_pts - 1)) * chart_w if num_pts > 1 else p_left
+    y_mid = (h - p_bottom) - ((t_mid - min_t) / span * chart_h)
+
+    t_end = points[-1]
+    time_end = times[-1]
+    y_end = (h - p_bottom) - ((t_end - min_t) / span * chart_h)
+
+    # ĐƯỜNG DÓNG ĐỨT NÉT CHỈ ĐIỂM (PROJECTION LINES)
+    proj_lines = (
+        f'<line x1="{p_left}" y1="{y_mid}" x2="{x_mid}" y2="{y_mid}" stroke="{grid_color}" stroke-dasharray="4" />'
+        f'<line x1="{x_mid}" y1="{y_min}" x2="{x_mid}" y2="{y_mid}" stroke="{grid_color}" stroke-dasharray="4" />'
+        f'<line x1="{p_left}" y1="{y_end}" x2="{x_last}" y2="{y_end}" stroke="{grid_color}" stroke-dasharray="4" />'
+        f'<line x1="{x_last}" y1="{y_min}" x2="{x_last}" y2="{y_end}" stroke="{grid_color}" stroke-dasharray="4" />'
+    )
+
+    axes = (
+        f'<line x1="{p_left}" y1="{p_top}" x2="{p_left}" y2="{y_min}" stroke="{axis_color}" stroke-width="1.2" />'
+        f'<line x1="{p_left}" y1="{y_min}" x2="{w - p_right}" y2="{y_min}" stroke="{axis_color}" stroke-width="1.2" />'
+    )
 
     y_labels = (
-        f'<text x="{p_left - 10}" y="{y_max + 4}" text-anchor="end" fill="{text_color}" font-size="11">{max_t:.1f}°C</text>'
-        f'<text x="{p_left - 10}" y="{y_mid + 4}" text-anchor="end" fill="{text_color}" font-size="11">{mid_t:.1f}°C</text>'
-        f'<text x="{p_left - 10}" y="{y_min + 4}" text-anchor="end" fill="{text_color}" font-size="11">{min_t:.1f}°C</text>'
+        f'<text x="{p_left - 10}" y="{y_start + 4}" text-anchor="end" fill="{text_color}" font-size="11">{t_start:.1f}°C</text>'
+        f'<text x="{p_left - 10}" y="{y_mid + 4}" text-anchor="end" fill="{text_color}" font-size="11">{t_mid:.1f}°C</text>'
+        f'<text x="{p_left - 10}" y="{y_end + 4}" text-anchor="end" fill="{text_color}" font-size="11">{t_end:.1f}°C</text>'
     )
 
-    # 5. THIẾT KẾ NHÃN TRỤC X VÀ ĐƯỜNG LƯỚI DỌC (TIME GRIDLINES)
-    x_labels = ""
-    vertical_grid = ""
-    if len(times) >= 2:
-        start_time = times[0]
-        end_time = times[-1]
-        mid_time = times[len(times) // 2]
-
-        x_mid = p_left + chart_w / 2.0
-        x_end = w - p_right
-
-        x_labels = (
-            f'<text x="{p_left}" y="{h - 10}" text-anchor="start" fill="{text_color}" font-size="11">{start_time}</text>'
-            f'<text x="{x_mid}" y="{h - 10}" text-anchor="middle" fill="{text_color}" font-size="11">{mid_time}</text>'
-            f'<text x="{x_end}" y="{h - 10}" text-anchor="end" fill="{text_color}" font-size="11">{end_time}</text>'
-        )
-
-        # Tạo lưới đứt nét dọc chỉ điểm mốc thời gian
-        vertical_grid = (
-            f'<line x1="{x_mid}" y1="{y_max}" x2="{x_mid}" y2="{y_min}" stroke="{grid_color}" stroke-dasharray="4" />'
-            f'<line x1="{x_end}" y1="{y_max}" x2="{x_end}" y2="{y_min}" stroke="{grid_color}" stroke-dasharray="4" />'
-        )
-
-    grid_lines = (
-        f'<line x1="{p_left}" y1="{y_max}" x2="{w - p_right}" y2="{y_max}" stroke="{grid_color}" stroke-dasharray="4" />'
-        f'<line x1="{p_left}" y1="{y_mid}" x2="{w - p_right}" y2="{y_mid}" stroke="{grid_color}" stroke-dasharray="4" />'
-        f'<line x1="{p_left}" y1="{y_min}" x2="{w - p_right}" y2="{y_min}" stroke="{axis_color}" stroke-width="1.2" />'  # Trục hoành X
-        f'<line x1="{p_left}" y1="{y_max}" x2="{p_left}" y2="{y_min}" stroke="{axis_color}" stroke-width="1.2" />'  # Trục tung Y
-        f"{vertical_grid}"
+    x_labels = (
+        f'<text x="{p_left}" y="{h - 10}" text-anchor="start" fill="{text_color}" font-size="11">{time_start}</text>'
+        f'<text x="{x_mid}" y="{h - 10}" text-anchor="middle" fill="{text_color}" font-size="11">{time_mid}</text>'
+        f'<text x="{x_last}" y="{h - 10}" text-anchor="end" fill="{text_color}" font-size="11">{time_end}</text>'
     )
 
-    # 6. DỰNG HÌNH VECTOR (SVG)
+    data_nodes = (
+        f'<circle cx="{p_left}" cy="{y_start}" r="3" fill="#ff3d00" />'
+        f'<circle cx="{x_mid}" cy="{y_mid}" r="3" fill="#ff3d00" />'
+        f'<circle cx="{x_last}" cy="{y_end}" r="3" fill="#ff3d00" />'
+    )
+
+    # DỰNG HÌNH VECTOR (SVG)
     svg_path = (
         f'<path d="M {p_left},{y_min} L {points_str} L {x_last},{y_min} Z" '
         'fill="rgba(255,61,0,0.1)"/>'
@@ -163,28 +172,44 @@ async def get_incident_graph(incident_id: str):
         f'stroke-linecap="round" points="{points_str}" />'
     )
 
-    # Kết hợp các thành phần đồ họa
     svg_graphics = (
         f'<svg viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg" '
         f'style="width:100%; height:{h}px; overflow:visible; display:block;">'
-        f"{grid_lines}{y_labels}{x_labels}{svg_path}{svg_line}</svg>"
+        f"{axes}{proj_lines}{y_labels}{x_labels}{svg_path}{svg_line}{data_nodes}</svg>"
     )
 
-    # 7. TRẢ VỀ TRẠNG THÁI KIỂM SOÁT TRIGGER QUA HTML (HATEOAS)
+    # 8. TRẢ VỀ TRẠNG THÁI KIỂM SOÁT TRIGGER QUA HTML (HATEOAS)
     if is_latest:
+        # TRẠNG THÁI 1: LIVE Ambient (Nhiệt độ phòng) -> Poll mỗi 5 giây
         wrapper = (
             '<div class="graph-wrapper margin" '
             'hx-get="/api/analytics/graph/latest" '
             'hx-trigger="every 5s" hx-swap="outerHTML">'
             f"{svg_graphics}</div>"
         )
-    else:
+    elif is_active:
+        # TRẠNG THÁI 2: LIVE Incident (Sự cố đang diễn ra) -> Vẫn Poll mỗi 5 giây nhưng là hx-get chính sự cố đó!
         status_bar = (
             '<div class="row margin valign" style="gap: 12px; margin-bottom: 16px;">'
-            f'<span class="chip error padding">Đang xem lịch sử vụ #{target_id}</span>'
+            f'<span class="chip error padding blinking">Sự cố #{target_id} ĐANG DIỄN RA (LIVE)</span>'
             '<button class="chip primary" hx-get="/api/analytics/graph/latest" '
             'hx-target=".graph-wrapper" hx-swap="outerHTML">'
-            "<i>sensors</i> Xem Trực Tiếp (LIVE)</button></div>"
+            "<i>sensors</i> Trở về Giám Sát Phòng (Ambient)</button></div>"
+        )
+        wrapper = (
+            f'<div class="graph-wrapper margin" '
+            f'hx-get="/api/analytics/graph/{target_id}" '
+            f'hx-trigger="every 5s" hx-swap="outerHTML">'
+            f"{status_bar}{svg_graphics}</div>"
+        )
+    else:
+        # TRẠNG THÁI 3: Lịch sử tĩnh (DONE) -> Dừng hoàn toàn Polling
+        status_bar = (
+            '<div class="row margin valign" style="gap: 12px; margin-bottom: 16px;">'
+            f'<span class="chip error padding">Lịch sử sự cố #{target_id}</span>'
+            '<button class="chip primary" hx-get="/api/analytics/graph/latest" '
+            'hx-target=".graph-wrapper" hx-swap="outerHTML">'
+            "<i>sensors</i> Trở về Giám Sát Phòng (Ambient)</button></div>"
         )
         wrapper = (
             '<div class="graph-wrapper margin" hx-swap="outerHTML">'
