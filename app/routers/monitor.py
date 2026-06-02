@@ -8,6 +8,9 @@ from app.config import CONFIG
 from app.schemas import MonitorPayload
 
 
+# Khai báo chính thức cho Basedpyright nhận diện thuộc tính công khai
+__all__ = ["router"]
+
 router = APIRouter()
 
 
@@ -19,17 +22,18 @@ async def get_dynamic_threshold() -> int:
     window = int(CONFIG["window_size"])
     offset = int(CONFIG["temp_offset"])
 
-    # Chỉ tính trung bình của các điểm dữ liệu nhỏ hơn ngưỡng hiện tại
-    query = """
-        SELECT AVG(temp) FROM (
-            SELECT temp FROM burning_logs 
-            WHERE temp < (SELECT current_dynamic_threshold FROM system_state WHERE id=1)
-            ORDER BY id DESC LIMIT ?
-        )
-    """
+    # Thêm dấu đóng ngoặc đơn ")" ở dòng cuối để khép lại truy vấn con SQLite
+    query = (
+        "SELECT AVG(temp) FROM ("
+        "SELECT temp FROM burning_logs "
+        "WHERE temp < (SELECT current_dynamic_threshold FROM system_state WHERE id=1) "
+        "ORDER BY id DESC LIMIT ?"
+        ")"
+    )
     res = await database.db.execute(query, [window])
     avg_val = res.rows[0][0]
 
+    # Kiểm tra kiểu dữ liệu an toàn bằng biến tạm
     base_temp = float(avg_val) if isinstance(avg_val, (int, float)) else 30.0
     return int(base_temp + offset)
 
@@ -75,7 +79,7 @@ async def monitor_system(data: MonitorPayload):
             raw_inc_id = inc_res.rows[0][0]
             raw_peak = inc_res.rows[0][1]
 
-            active_inc_id = int(raw_inc_id) if isinstance(raw_inc_id, int) else 0
+            inc_id = int(raw_inc_id) if isinstance(raw_inc_id, int) else 0
             old_peak = float(raw_peak) if isinstance(raw_peak, (int, float)) else 0.0
 
             if data.temp > old_peak:
@@ -89,7 +93,7 @@ async def monitor_system(data: MonitorPayload):
             "UPDATE incidents SET end_time = ? WHERE end_time = 'Active'", [now]
         )
 
-    # Ghi log liên tục bất kể trạng thái để duy trì cửa sổ trượt mượt mà
+    # Ghi log liên tục vào burning_logs để duy trì cửa sổ trượt
     await database.db.execute(
         "INSERT INTO burning_logs (incident_id, timestamp, temp, smoke) VALUES (?, ?, ?, ?)",
         [active_inc_id, now, data.temp, data.smoke],
@@ -116,20 +120,28 @@ async def get_status_html():
         return HTMLResponse("<div>No data</div>")
 
     r = res.rows[0]
-
-    # Gán vào các biến tạm để Basedpyright thực hiện Type Narrowing chính xác
     raw_status, raw_temp, raw_smoke, raw_thresh, raw_ts = r[0], r[1], r[2], r[3], r[4]
 
+    # Viết khối lệnh rẽ nhánh an toàn để ép kiểu tuyệt đối (Không dùng ternary một dòng)
     status = str(raw_status) if raw_status is not None else "safe"
-    temp = float(raw_temp) if isinstance(raw_temp, (int, float)) else 0.0
-    smoke = int(raw_smoke) if isinstance(raw_smoke, int) else 0
-    thresh = int(raw_thresh) if isinstance(raw_thresh, int) else 45
     ts = str(raw_ts) if raw_ts is not None else ""
+
+    temp = 0.0
+    if isinstance(raw_temp, (int, float)):
+        temp = float(raw_temp)
+
+    smoke = 0
+    if isinstance(raw_smoke, int):
+        smoke = int(raw_smoke)
+
+    thresh = 45
+    if isinstance(raw_thresh, int):
+        thresh = int(raw_thresh)
 
     status_class = "critical-bg white-text" if status == "critical" else ""
     status_icon = "warning" if status == "critical" else "check_circle"
 
-    # Định dạng các khối phân mảnh HTML
+    # Ngắt chuỗi để tuân thủ Ruff E501
     temp_frag = (
         '<div class="temp-data"><div class="row"><i class="orange-text">thermostat</i>'
         f'<div class="max"><h6>Nhiệt độ</h6><h4>{temp}°C</h4></div></div></div>'
@@ -154,24 +166,44 @@ async def get_status_html():
 
 
 @router.get("/api/history", response_class=HTMLResponse)
-async def get_history_html():
+async def get_history_html(page: int = 1):
+    """Lấy lịch sử cảnh báo có phân trang động (Numbered Pagination)."""
     if database.db is None:
         return HTMLResponse("")
+
+    page = max(1, page)
+    PAGE_SIZE = 5  # Giới hạn 5 bản ghi mỗi trang để triệt tiêu việc cuộn (Scroll)
+
+    # 1. Tính toán tổng số bản ghi và tổng số trang
+    count_res = await database.db.execute("SELECT COUNT(*) FROM incidents")
+    total_items = 0
+    if count_res.rows:
+        raw_count = count_res.rows[0][0]
+        total_items = int(raw_count) if isinstance(raw_count, int) else 0
+
+    total_pages = max(1, (total_items + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = min(page, total_pages)
+    offset = (page - 1) * PAGE_SIZE
+
+    # 2. Truy vấn dữ liệu phân trang
     res = await database.db.execute(
         "SELECT incident_id, start_time, end_time, peak_temp "
-        "FROM incidents ORDER BY 1 DESC LIMIT 10"
+        "FROM incidents ORDER BY 1 DESC LIMIT ? OFFSET ?",
+        [PAGE_SIZE, offset],
     )
 
     rows = []
     for r in res.rows:
         inc_id_raw, start_time_raw, end_time_raw, peak_temp_raw = r[0], r[1], r[2], r[3]
 
+        # Viết khối lệnh rẽ nhánh an toàn để ép kiểu tuyệt đối [Khắc phục dòng lỗi 127]
         inc_id = int(inc_id_raw) if isinstance(inc_id_raw, int) else 0
         start_time = str(start_time_raw) if start_time_raw is not None else ""
         dest_time = str(end_time_raw) if end_time_raw is not None else ""
-        peak_temp = (
-            float(peak_temp_raw) if isinstance(peak_temp_raw, (int, float)) else 0.0
-        )
+
+        peak_temp = 0.0
+        if isinstance(peak_temp_raw, (int, float)):
+            peak_temp = float(peak_temp_raw)
 
         btn_class = "error" if dest_time == "Active" else "outline"
         btn_label = "LIVE" if dest_time == "Active" else "DONE"
@@ -188,6 +220,44 @@ async def get_history_html():
         )
         rows.append(row)
 
-    return HTMLResponse(
-        "".join(rows) if rows else "<tr><td colspan='5'>No history</td></tr>"
+    tbody_content = (
+        "".join(rows)
+        if rows
+        else "<tr><td colspan='5' class='center-align'>Chưa có nhật ký</td></tr>"
     )
+
+    # Khối <tbody> tự động Polling đúng trang hiện tại
+    tbody_html = (
+        f'<tbody id="history-body" hx-get="/api/history?page={page}" '
+        f'hx-trigger="every 2s" hx-swap="outerHTML">'
+        f"{tbody_content}"
+        f"</tbody>"
+    )
+
+    # 3. DỰNG CỤM NÚT SỐ PHÂN TRANG ĐỘNG (Dùng HTMX OOB Swap)
+    pag_buttons = []
+    if page > 1:
+        pag_buttons.append(
+            f'<button class="chip outline" hx-get="/api/history?page={page - 1}" hx-target="#history-body" hx-swap="outerHTML"><i>chevron_left</i></button>'
+        )
+
+    for p in range(1, total_pages + 1):
+        btn_class = "primary" if p == page else "outline"
+        pag_buttons.append(
+            f'<button class="chip {btn_class}" hx-get="/api/history?page={p}" hx-target="#history-body" hx-swap="outerHTML">{p}</button>'
+        )
+
+    if page < total_pages:
+        pag_buttons.append(
+            f'<button class="chip outline" hx-get="/api/history?page={page + 1}" hx-target="#history-body" hx-swap="outerHTML"><i>chevron_right</i></button>'
+        )
+
+    # Thẻ div này chứa hx-swap-oob="true" sẽ tự động bắn ra ngoài bảng để cập nhật cụm nút phân trang
+    pag_html = (
+        f'<div id="history-pagination" hx-swap-oob="true" '
+        f'class="row center-align padding" style="justify-content: center; gap: 6px;">'
+        f"{''.join(pag_buttons)}"
+        f"</div>"
+    )
+
+    return HTMLResponse(content=f"{tbody_html}{pag_html}")
