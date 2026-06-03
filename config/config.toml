@@ -18,6 +18,8 @@ window_size = 10
 #! HYSTERESIS: Anti-flicker buffer in Degrees Celsius.
 # Prevents state oscillation when temp floats exactly at threshold.
 hysteresis = 2
+# If the new fire reignites within X seconds after being extinguished → it will be included in the old incident.
+incident_cooldown = 60
 
 # ---------------------------------------------------------
 

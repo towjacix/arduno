@@ -76,11 +76,38 @@ async def monitor_system(data: MonitorPayload):
     # LOGIC XỬ LÝ SỰ CỐ & CẬP NHẬT PEAK TEMP LIÊN TỤC
     if new_status == "critical":
         if old_status == "safe":
-            # Tạo sự cố mới khi bắt đầu chuyển sang critical
-            await database.db.execute(
-                "INSERT INTO incidents (start_time, end_time, peak_temp) VALUES (?, 'Active', ?)",
-                [now, data.temp],
+            cooldown = int(CONFIG.get_nested("incident_cooldown", default=60))
+
+            last_res = await database.db.execute(
+                "SELECT incident_id, end_time FROM incidents "
+                "WHERE end_time != 'Active' ORDER BY incident_id DESC LIMIT 1"
             )
+
+            reopen = False
+            if last_res.rows:
+                last_id = last_res.rows[0][0]
+                last_end = str(last_res.rows[0][1])
+                try:
+                    end_dt = datetime.datetime.strptime(last_end, "%Y-%m-%d %H:%M:%S")
+                    seconds_since = (datetime.datetime.now() - end_dt).total_seconds()
+                    if seconds_since <= cooldown:
+                        reopen = True
+                except ValueError:
+                    pass
+
+            if reopen:
+                # Cháy lại trong cooldown window → mở lại incident cũ, không tạo mới
+                await database.db.execute(
+                    "UPDATE incidents SET end_time = 'Active' WHERE incident_id = ?",
+                    [last_id],
+                )
+                active_inc_id = int(last_id) if isinstance(last_id, int) else 0
+            else:
+                # Sự cố hoàn toàn mới
+                await database.db.execute(
+                    "INSERT INTO incidents (start_time, end_time, peak_temp) VALUES (?, 'Active', ?)",
+                    [now, data.temp],
+                )
 
         inc_res = await database.db.execute(
             "SELECT incident_id, peak_temp FROM incidents WHERE end_time = 'Active' LIMIT 1"
