@@ -26,7 +26,7 @@ async def get_dynamic_threshold() -> int:
         "SELECT temp FROM burning_logs "
         "WHERE temp < (SELECT current_dynamic_threshold FROM system_state WHERE id=1) "
         "ORDER BY id DESC LIMIT ?"
-        ")"
+        ") AS safe_window"
     )
     res = await database.db.execute(query, [window])
     avg_val = res.rows[0][0]

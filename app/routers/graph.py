@@ -4,6 +4,7 @@ from fastapi import APIRouter, Response
 
 import app.database as database
 
+
 __all__ = ["router"]
 
 router = APIRouter()
@@ -59,7 +60,7 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
                     "SELECT temp, smoke, timestamp FROM ("
                     "  SELECT temp, smoke, timestamp FROM burning_logs "
                     "  ORDER BY id DESC LIMIT 30"
-                    ") ORDER BY id ASC"
+                    ") AS recent ORDER BY id ASC"
                 )
         else:
             target_id = 0
@@ -68,7 +69,7 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
                 "  SELECT temp, smoke, timestamp FROM burning_logs "
                 "  WHERE incident_id = 0 "
                 "  ORDER BY id DESC LIMIT 30"
-                ") ORDER BY id ASC"
+                ") AS recent ORDER BY id ASC"
             )
             res = await database.db.execute(q)
     else:
