@@ -28,7 +28,10 @@ class AppConfig:
         return data if data is not None else default
 
     def __getitem__(self, key: str) -> Any:
-        return self._config.get(key)
+        try:
+            return self._config[key]
+        except KeyError:
+            raise KeyError(f"Missing config key: '{key}'") from None
 
 
 CONFIG = AppConfig()

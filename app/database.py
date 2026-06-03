@@ -13,6 +13,10 @@ db: Client = None  # type: ignore
 
 def init_db():
     global db
+    if not TURSO_URL:
+        import logging
+        logging.warning("TURSO_DATABASE_URL is not set — database disabled")
+        return
     # Nếu URL bắt đầu bằng https://, libsql-client sẽ tự động dùng HTTP API
     # Điều này tránh được lỗi WSS Handshake (WebSocket) trên Serverless
     db = create_client(url=TURSO_URL, auth_token=TURSO_TOKEN)

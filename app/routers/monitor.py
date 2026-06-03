@@ -29,6 +29,8 @@ async def get_dynamic_threshold() -> int:
         ") AS safe_window"
     )
     res = await database.db.execute(query, [window])
+    if not res.rows:
+        return int(30.0 + offset)
     avg_val = res.rows[0][0]
 
     base_temp = float(avg_val) if isinstance(avg_val, (int, float)) else 30.0
@@ -162,10 +164,9 @@ async def get_status_html():
         return HTMLResponse("<div id='status-grid'>No data</div>")
 
     r = res.rows[0]
-    raw_status, raw_temp, raw_smoke, raw_thresh, raw_ts = r[0], r[1], r[2], r[3], r[4]
+    raw_status, raw_temp, raw_smoke, raw_thresh = r[0], r[1], r[2], r[3]
 
     status = str(raw_status) if raw_status is not None else "safe"
-    ts = str(raw_ts) if raw_ts is not None else ""
 
     temp = 0.0
     if isinstance(raw_temp, (int, float)):

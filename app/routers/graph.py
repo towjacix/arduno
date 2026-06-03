@@ -10,8 +10,6 @@ __all__ = ["router"]
 router = APIRouter()
 
 
-
-
 def _build_svg(
     points_t: list[float],
     points_s: list[float],
