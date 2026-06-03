@@ -277,7 +277,7 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
         f'<span style="display:flex;align-items:center;gap:5px;">'
         f'<span style="width:18px;height:2px;background:#ff3d00;border-radius:1px;display:inline-block;"></span>Nhiệt độ (°C)</span>'
         f'<span style="display:flex;align-items:center;gap:5px;">'
-        f'<span style="width:10px;height:10px;background:rgba(33,150,243,0.3);border:1px solid #2196f3;border-radius:2px;display:inline-block;"></span>Khói (ADC)</span>'
+        f'<span style="width:18px;height:2px;background:#2196f3;border-radius:1px;display:inline-block;"></span>Khói (ADC)</span>'
         f"</div>"
         f'<div style="display:flex;gap:6px;">'
         f'<button class="chip {cf}" hx-get="/api/analytics/graph/{incident_id}?zoom=flat" hx-target=".graph-wrapper" hx-swap="outerHTML">Mặc định</button>'
