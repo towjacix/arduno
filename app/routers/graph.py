@@ -10,22 +10,6 @@ __all__ = ["router"]
 router = APIRouter()
 
 
-def _normalize_temp(values: list[float], min_span: float = 0.0) -> list[float]:
-    """Normalize danh sách nhiệt độ về 0–100%.
-    min_span đảm bảo khoảng dao động tối thiểu (dùng cho zoom detail).
-    """
-    mn, mx = min(values), max(values)
-    span = mx - mn
-    if span < min_span:
-        diff = min_span - span
-        mn = max(
-            20.0, mn - diff / 2.0
-        )  # Giới hạn cận dưới không xuống dưới nhiệt độ phòng
-        mx = mn + min_span
-        span = min_span
-    if span == 0:
-        return [50.0] * len(values)
-    return [(v - mn) / span * 100.0 for v in values]
 
 
 def _build_svg(

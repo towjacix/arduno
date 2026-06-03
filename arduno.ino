@@ -85,6 +85,9 @@ String atRead(unsigned int timeoutMs = AT_TIMEOUT_MS) {
     while (espSerial.available()) {
       response += (char)espSerial.read();
     }
+    if (response.indexOf("CLOSED") != -1 || response.indexOf("ERROR") != -1) {
+      break;
+    }
   }
   return response;
 }

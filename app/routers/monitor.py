@@ -24,7 +24,7 @@ async def get_dynamic_threshold() -> int:
     query = (
         "SELECT AVG(temp) FROM ("
         "SELECT temp FROM burning_logs "
-        "WHERE temp < (SELECT current_dynamic_threshold FROM system_state WHERE id=1) "
+        "WHERE incident_id = 0 "
         "ORDER BY id DESC LIMIT ?"
         ") AS safe_window"
     )
@@ -179,8 +179,8 @@ async def get_status_html():
     if isinstance(raw_thresh, int):
         thresh = int(raw_thresh)
 
-    status_class = "error" if status == "critical" else ""
-    icon_class = "" if status == "critical" else "blue-text"
+    status_class = "critical-bg white-text" if status == "critical" else ""
+    icon_class = "white-text" if status == "critical" else "blue-text"
     status_icon = "warning" if status == "critical" else "check_circle"
 
     return HTMLResponse(
