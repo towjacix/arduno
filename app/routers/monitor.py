@@ -228,16 +228,20 @@ async def get_status_html():
 
 
 @router.get("/api/history", response_class=HTMLResponse)
-async def get_history_html():
-    """Lấy toàn bộ lịch sử cảnh báo, trả về dạng scrollable tbody đơn giản."""
+async def get_history_html(offset: int = 0, limit: int = 20):
+    """Lấy lịch sử cảnh báo với phân trang Infinite Scroll qua HTMX."""
     if database.db is None:
-        return HTMLResponse(
-            '<tbody id="history-body"><tr><td colspan="5" class="center-align">Offline</td></tr></tbody>'
-        )
+        if offset == 0:
+            return HTMLResponse(
+                '<tbody id="history-body"><tr><td colspan="5" class="center-align">Offline</td></tr></tbody>'
+            )
+        else:
+            return HTMLResponse('<tr><td colspan="5" class="center-align">Offline</td></tr>')
 
     res = await database.db.execute(
         "SELECT incident_id, start_time, end_time, peak_temp "
-        "FROM incidents ORDER BY incident_id DESC"
+        "FROM incidents ORDER BY incident_id DESC LIMIT ? OFFSET ?",
+        [limit, offset]
     )
 
     rows = []
@@ -264,15 +268,26 @@ async def get_history_html():
             f"<td><button class='chip {btn_class}'>{btn_label}</button></td></tr>"
         )
 
-    tbody_content = (
-        "".join(rows)
-        if rows
-        else "<tr><td colspan='5' class='center-align'>Chưa có nhật ký</td></tr>"
-    )
+    # Nếu số lượng bản ghi trả về bằng limit, tức là có thể còn dữ liệu tiếp theo
+    if len(res.rows) == limit:
+        next_offset = offset + limit
+        rows.append(
+            f'<tr id="load-more" '
+            f'hx-get="/api/history?offset={next_offset}&limit={limit}" '
+            f'hx-trigger="revealed" hx-target="#load-more" hx-swap="outerHTML">'
+            f'<td colspan="5" class="center-align"><progress class="circle small"></progress> Đang tải thêm...</td>'
+            f'</tr>'
+        )
 
-    return HTMLResponse(
-        f'<tbody id="history-body" '
-        f'hx-get="/api/history" hx-trigger="every 10s" hx-swap="outerHTML">'
-        f"{tbody_content}"
-        f"</tbody>"
-    )
+    tbody_content = "".join(rows)
+
+    if offset == 0:
+        # Trang đầu tiên -> Trả về thẻ tbody đầy đủ
+        if not tbody_content:
+            tbody_content = "<tr><td colspan='5' class='center-align'>Chưa có nhật ký</td></tr>"
+        return HTMLResponse(
+            f'<tbody id="history-body">{tbody_content}</tbody>'
+        )
+    else:
+        # Các trang sau -> Chỉ trả về các hàng tr
+        return HTMLResponse(tbody_content)
