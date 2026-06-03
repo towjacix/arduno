@@ -235,10 +235,9 @@ async def get_history_html():
             '<tbody id="history-body"><tr><td colspan="5" class="center-align">Offline</td></tr></tbody>'
         )
 
-    MAX_ROWS = 100
     res = await database.db.execute(
-        f"SELECT incident_id, start_time, end_time, peak_temp "
-        f"FROM incidents ORDER BY incident_id DESC LIMIT {MAX_ROWS}"
+        "SELECT incident_id, start_time, end_time, peak_temp "
+        "FROM incidents ORDER BY incident_id DESC"
     )
 
     rows = []
