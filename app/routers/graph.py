@@ -182,14 +182,14 @@ async def get_incident_graph(incident_id: str, zoom: str = "flat"):
             else:
                 res = await database.db.execute(
                     "SELECT temp, smoke, timestamp FROM ("
-                    "  SELECT temp, smoke, timestamp FROM burning_logs "
+                    "  SELECT id, temp, smoke, timestamp FROM burning_logs "
                     "  ORDER BY id DESC LIMIT 30"
                     ") AS recent ORDER BY id ASC"
                 )
         else:
             res = await database.db.execute(
                 "SELECT temp, smoke, timestamp FROM ("
-                "  SELECT temp, smoke, timestamp FROM burning_logs "
+                "  SELECT id, temp, smoke, timestamp FROM burning_logs "
                 "  WHERE incident_id = 0 ORDER BY id DESC LIMIT 30"
                 ") AS recent ORDER BY id ASC"
             )
