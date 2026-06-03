@@ -4,4 +4,6 @@ fastapi
 uvicorn
 requests
 libsql-client
+httpx
+pytest
 # toml đã xoá — code dùng tomllib từ stdlib (Python 3.11+), không cần package ngoài
