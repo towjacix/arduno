@@ -18,7 +18,7 @@ def _build_svg(
     times: list[str],
     zoom: str,
 ) -> str:
-    """Vẽ SVG chart kép: cột khói + đường nhiệt độ lót nền."""
+    """Vẽ SVG chart kép: đường khói + đường nhiệt độ cùng normalized 0-100%."""
     w, h = 800, 200
     p_left, p_right, p_top, p_bottom = 60, 60, 20, 30
     chart_w = w - p_left - p_right
@@ -38,10 +38,18 @@ def _build_svg(
 
     norm_t = [(v - min_t) / span_t * 100.0 for v in points_t]
 
-    # 2. Chuẩn hóa khói (luôn từ mốc 0 đến ceiling tối thiểu 400)
+    # 2. Chuẩn hóa khói (0-100% theo min/max thực tế, bảo vệ bằng min_span_s)
+    min_span_s = 50.0 if zoom == "detail" else 300.0
+    min_s = min(points_s) if points_s else 0.0
     max_s = max(points_s) if points_s else 300.0
-    smoke_ceiling = max(400.0, float(max_s))
-    norm_s = [s / smoke_ceiling * 100.0 for s in points_s]
+    span_s = max_s - min_s
+    if span_s < min_span_s:
+        diff = min_span_s - span_s
+        min_s = max(0.0, min_s - diff / 2.0)
+        max_s = min_s + min_span_s
+        span_s = min_span_s
+
+    norm_s = [(s - min_s) / span_s * 100.0 for s in points_s]
 
     def x_pos(i: int) -> float:
         return p_left + (i / (num_pts - 1)) * chart_w if num_pts > 1 else p_left
@@ -53,7 +61,7 @@ def _build_svg(
     text_color = "#9e9e9e"
     grid_color = "rgba(255,255,255,0.22)"
 
-    # Trục chính kép
+    # Trục chính
     axes = (
         f'<line x1="{p_left}" y1="{p_top}" x2="{p_left}" y2="{y_base}" stroke="{axis_color}" stroke-width="1.2"/>'
         f'<line x1="{w - p_right}" y1="{p_top}" x2="{w - p_right}" y2="{y_base}" stroke="{axis_color}" stroke-width="1.2"/>'
@@ -63,11 +71,12 @@ def _build_svg(
     # Gridlines ngang: 0%, 50%, 100% kèm nhãn thật 2 bên trục Y
     grids = ""
     mid_t = (max_t + min_t) / 2.0
+    mid_s = (max_s + min_s) / 2.0
     y_ticks_left = {100: f"{max_t:.1f}°C", 50: f"{mid_t:.1f}°C", 0: f"{min_t:.1f}°C"}
     y_ticks_right = {
-        100: f"{smoke_ceiling:.0f} ADC",
-        50: f"{smoke_ceiling / 2:.0f} ADC",
-        0: "0 ADC",
+        100: f"{max_s:.0f} ADC",
+        50: f"{mid_s:.0f} ADC",
+        0: f"{min_s:.0f} ADC",
     }
 
     for pct in [100, 50, 0]:
@@ -78,60 +87,75 @@ def _build_svg(
             f'<text x="{w - p_right + 8}" y="{yg + 4:.1f}" text-anchor="start" fill="#2196f3" font-size="10">{y_ticks_right[pct]}</text>'
         )
 
-    # Cột khói (bars)
-    col_w = max(2.0, (chart_w / num_pts) * 0.45)
-    bars = ""
-    for i, pct in enumerate(norm_s):
-        cx = x_pos(i)
-        bh = (pct / 100.0) * chart_h
-        bars += (
-            f'<rect x="{cx - col_w / 2:.1f}" y="{y_base - bh:.1f}" '
-            f'width="{col_w:.1f}" height="{bh:.1f}" '
-            f'fill="rgba(33,150,243,0.12)" stroke="#2196f3" stroke-width="0.8"/>'
-        )
-
-    # Fill dưới đường nhiệt độ
-    coords = [(x_pos(i), y_pos(p)) for i, p in enumerate(norm_t)]
-    pts_str = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
-    x0, xn = coords[0][0], coords[-1][0]
-    fill_path = (
-        f'<path d="M {x0:.1f},{y_base} L {pts_str} L {xn:.1f},{y_base} Z" '
-        f'fill="rgba(255,61,0,0.08)"/>'
+    # Đường khói (Smoke line & area)
+    coords_s = [(x_pos(i), y_pos(p)) for i, p in enumerate(norm_s)]
+    pts_s_str = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords_s)
+    x0, xn = coords_s[0][0], coords_s[-1][0]
+    
+    fill_smoke = (
+        f'<path d="M {x0:.1f},{y_base} L {pts_s_str} L {xn:.1f},{y_base} Z" '
+        f'fill="rgba(33,150,243,0.05)"/>'
+    )
+    line_smoke = (
+        f'<polyline fill="none" stroke="#2196f3" stroke-width="1.6" '
+        f'stroke-linecap="round" points="{pts_s_str}"/>'
     )
 
-    # Đường nhiệt độ
-    line = (
+    # Đường nhiệt độ (Temperature line & area)
+    coords_t = [(x_pos(i), y_pos(p)) for i, p in enumerate(norm_t)]
+    pts_t_str = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords_t)
+    
+    fill_temp = (
+        f'<path d="M {x0:.1f},{y_base} L {pts_t_str} L {xn:.1f},{y_base} Z" '
+        f'fill="rgba(255,61,0,0.06)"/>'
+    )
+    line_temp = (
         f'<polyline fill="none" stroke="#ff3d00" stroke-width="1.8" '
-        f'stroke-linecap="round" points="{pts_str}"/>'
+        f'stroke-linecap="round" points="{pts_t_str}"/>'
     )
 
     # Điểm peak + projection lines
-    peak_idx = norm_t.index(max(norm_t))
-    xp, yp = coords[peak_idx]
+    peak_t_idx = norm_t.index(max(norm_t))
+    xp_t, yp_t = coords_t[peak_t_idx]
+    
+    peak_s_idx = norm_s.index(max(norm_s))
+    xp_s, yp_s = coords_s[peak_s_idx]
+
     proj = (
-        f'<line x1="{p_left}" y1="{yp:.1f}" x2="{w - p_right}" y2="{yp:.1f}" stroke="{grid_color}" stroke-dasharray="4"/>'
-        f'<line x1="{xp:.1f}" y1="{y_base}" x2="{xp:.1f}" y2="{p_top}" stroke="{grid_color}" stroke-dasharray="4"/>'
-        f'<line x1="{xn:.1f}" y1="{y_base}" x2="{xn:.1f}" y2="{p_top}" stroke="{grid_color}" stroke-dasharray="4"/>'
+        f'<line x1="{p_left}" y1="{yp_t:.1f}" x2="{w - p_right}" y2="{yp_t:.1f}" stroke="{grid_color}" stroke-dasharray="4"/>'
+        f'<line x1="{xp_t:.1f}" y1="{y_base}" x2="{xp_t:.1f}" y2="{p_top}" stroke="{grid_color}" stroke-dasharray="4"/>'
+        f'<line x1="{xp_s:.1f}" y1="{y_base}" x2="{xp_s:.1f}" y2="{p_top}" stroke="{grid_color}" stroke-dasharray="4"/>'
     )
 
-    # Nodes: start, peak, end
+    # Nodes cho cả 2
     nodes = (
-        f'<circle cx="{coords[0][0]:.1f}" cy="{coords[0][1]:.1f}" r="3" fill="#ff3d00"/>'
-        f'<circle cx="{xp:.1f}" cy="{yp:.1f}" r="3.5" fill="#ff3d00"/>'
-        f'<circle cx="{coords[-1][0]:.1f}" cy="{coords[-1][1]:.1f}" r="3" fill="#ff3d00"/>'
+        f'<circle cx="{coords_t[0][0]:.1f}" cy="{coords_t[0][1]:.1f}" r="3" fill="#ff3d00"/>'
+        f'<circle cx="{xp_t:.1f}" cy="{yp_t:.1f}" r="4" fill="#ff3d00"/>'
+        f'<circle cx="{coords_t[-1][0]:.1f}" cy="{coords_t[-1][1]:.1f}" r="3" fill="#ff3d00"/>'
+        f'<circle cx="{coords_s[0][0]:.1f}" cy="{coords_s[0][1]:.1f}" r="2" fill="#2196f3"/>'
+        f'<circle cx="{xp_s:.1f}" cy="{yp_s:.1f}" r="3.5" fill="#2196f3"/>'
+        f'<circle cx="{coords_s[-1][0]:.1f}" cy="{coords_s[-1][1]:.1f}" r="2" fill="#2196f3"/>'
     )
 
     # X labels: start, peak, end
     MIN_X_GAP = 60.0
     x_labels = f'<text x="{x0:.1f}" y="{h - 8}" text-anchor="start" fill="{text_color}" font-size="10">{times[0]}</text>'
-    if abs(xp - x0) >= MIN_X_GAP and abs(xn - xp) >= MIN_X_GAP:
-        x_labels += f'<text x="{xp:.1f}" y="{h - 8}" text-anchor="middle" fill="{text_color}" font-size="10">{times[peak_idx]}</text>'
+    
+    xp_lbl = xp_t
+    lbl_idx = peak_t_idx
+    if abs(xp_s - x0) >= MIN_X_GAP and abs(xn - xp_s) >= MIN_X_GAP:
+        xp_lbl = xp_s
+        lbl_idx = peak_s_idx
+        
+    if abs(xp_lbl - x0) >= MIN_X_GAP and abs(xn - xp_lbl) >= MIN_X_GAP:
+        x_labels += f'<text x="{xp_lbl:.1f}" y="{h - 8}" text-anchor="middle" fill="{text_color}" font-size="10">{times[lbl_idx]}</text>'
+    
     x_labels += f'<text x="{xn:.1f}" y="{h - 8}" text-anchor="end" fill="{text_color}" font-size="10">{times[-1]}</text>'
 
     return (
         f'<svg viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg" '
         f'style="width:100%;height:{h}px;overflow:visible;display:block;">'
-        f"{axes}{grids}{bars}{fill_path}{proj}{line}{nodes}{x_labels}"
+        f"{axes}{grids}{fill_smoke}{fill_temp}{proj}{line_smoke}{line_temp}{nodes}{x_labels}"
         f"</svg>"
     )
 
