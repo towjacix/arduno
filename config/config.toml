@@ -40,6 +40,8 @@ smoke = 300
 ###! UI RENDERER CONTEXT (SERVER-DRIVEN)
 # Graphics parameters for the Backend-generated SVG engine.
 [ui.graph]
+temp_scale_max = 70
+smoke_scale_max = 1023
 width = 800
 height = 200
 max_points = 50

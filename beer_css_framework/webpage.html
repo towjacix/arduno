@@ -109,7 +109,6 @@
             <div class="row">
               <i class="primary-text">timeline</i>
               <div class="max"><h5>Diễn biến sự cố (Thời gian thực)</h5></div>
-              <button class="chip primary">LIVE</button>
             </div>
             <div class="graph-wrapper margin">
               <!-- ── Legend + controls row ── -->
@@ -292,7 +291,7 @@
 
           // Use server-provided fixed ceilings (fall back to sensible defaults)
           const scaleTempMax  = data.scale_temp_max  || 70;
-          const scaleSmokeMax = data.scale_smoke_max || 500;
+          const scaleSmokeMax = data.scale_smoke_max || 1023;
           const warnPct       = data.warn_pct        || 60;
           const critPct       = data.critical_pct    || 70;
 
@@ -394,6 +393,7 @@
             ],
           },
           options: {
+            layout: { padding: { top: 15, right: 15 } },
             animation:   false,
             responsive:  true,
             maintainAspectRatio: false,

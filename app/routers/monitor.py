@@ -148,17 +148,16 @@ async def monitor_system(data: MonitorPayload):
         [new_status, now, data.temp, data.smoke, threshold],
     )
     # ── Level classification (for Arduino buzzer) ─────────────────────────
-    # Uses the same fixed scale ceilings as the chart JS:
-    #   temp  ceiling = 70°C   (critical threshold / 0.70)
-    #   smoke ceiling = 500 ADC
+    # We provide temp_pct and smoke_pct for the graph overlay.
     # Level: safe < 60% | warning 60–70% | critical > 70%
     _temp_ceil  = float(CONFIG.get_nested("ui", "graph", "temp_scale_max",  default=70))
-    _smoke_ceil = float(CONFIG.get_nested("ui", "graph", "smoke_scale_max", default=500))
+    _smoke_ceil = float(CONFIG.get_nested("ui", "graph", "smoke_scale_max", default=1023))
     temp_pct  = min(100.0, data.temp  / _temp_ceil  * 100.0)
     smoke_pct = min(100.0, data.smoke / _smoke_ceil * 100.0)
     peak_pct  = max(temp_pct, smoke_pct)
 
-    if peak_pct >= 70.0:
+    # Buzzer must ALWAYS fire if the database state is critical.
+    if new_status == "critical":
         level = "critical"
     elif peak_pct >= 60.0:
         level = "warning"
