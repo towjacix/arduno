@@ -17,6 +17,7 @@
     ></script>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
     <link
       rel="icon"
       href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔥</text></svg>"
@@ -132,14 +133,31 @@
       <div class="grid">
         <div class="s12">
           <article class="border round">
-            <div class="row padding">
+            <div class="row padding" style="flex-wrap:wrap;gap:8px;align-items:center;">
               <i class="primary-text">history</i>
               <h5 class="max">Lịch sử cảnh báo</h5>
+              <!-- ── Search bar ── -->
+              <div class="field border round" style="min-width:140px;max-width:200px;margin:0;">
+                <input
+                  id="history-search-input"
+                  type="number"
+                  min="1"
+                  placeholder="Tìm ID sự cố…"
+                  style="padding:6px 10px;font-size:13px;"
+                  onkeydown="if(event.key==='Enter') searchHistory()"
+                />
+              </div>
+              <button
+                class="chip primary"
+                onclick="searchHistory()"
+                id="btn-history-search"
+              >
+                <i>search</i> Tìm
+              </button>
               <button
                 class="circle transparent"
-                hx-get="/api/history"
-                hx-target="#history-body"
-                hx-swap="outerHTML"
+                onclick="resetHistory()"
+                title="Xem tất cả"
               >
                 <i>refresh</i>
               </button>
@@ -211,18 +229,12 @@
       let chart    = null;
       let pollTimer = null;
 
-      // ── Normalization (mirrors Python logic, runs in browser) ──────────
-      function normalize(arr, minSpan) {
+      // ── Fixed-scale normalization ──────────────────────────────────────
+      // Server tells us the physical ceiling for each series.
+      // We NEVER derive scale from window min/max — the graph is stable.
+      function normalizeFixed(arr, scaleMax) {
         if (!arr.length) return [];
-        let mn = Math.min(...arr);
-        let mx = Math.max(...arr);
-        let span = mx - mn;
-        if (span < minSpan) {
-          mn = Math.max(0, mn - (minSpan - span) / 2);
-          mx = mn + minSpan;
-          span = minSpan;
-        }
-        return arr.map(v => (v - mn) / span * 100);
+        return arr.map(v => Math.min(100, v / scaleMax * 100));
       }
 
       // ── Fetch data + update chart ──────────────────────────────────────
@@ -235,19 +247,32 @@
           rawTemp  = data.temp  || [];
           rawSmoke = data.smoke || [];
 
-          const minSpanT = currentZoom === 'detail' ? 2  : 10;
-          const minSpanS = currentZoom === 'detail' ? 50 : 200;
-          const normT = normalize(rawTemp,  minSpanT);
-          const normS = normalize(rawSmoke, minSpanS);
+          // Use server-provided fixed ceilings (fall back to sensible defaults)
+          const scaleTempMax  = data.scale_temp_max  || 70;
+          const scaleSmokeMax = data.scale_smoke_max || 500;
+          const warnPct       = data.warn_pct        || 60;
+          const critPct       = data.critical_pct    || 70;
 
-          if (!chart) initChart();
+          const normT = normalizeFixed(rawTemp,  scaleTempMax);
+          const normS = normalizeFixed(rawSmoke, scaleSmokeMax);
+
+          if (!chart) initChart(warnPct, critPct);
+
+          // Update threshold lines if they changed
+          const ann = chart.options.plugins.annotation.annotations;
+          ann.warnLine.yMin = ann.warnLine.yMax = warnPct;
+          ann.critLine.yMin = ann.critLine.yMax = critPct;
+          ann.safeZone.yMax    = warnPct;
+          ann.warnZone.yMin    = warnPct;
+          ann.warnZone.yMax    = critPct;
+          ann.critZone.yMin    = critPct;
 
           chart.data.labels           = data.times || [];
           chart.data.datasets[0].data = normS;   // bars
           chart.data.datasets[1].data = normT;   // line
           chart.update('none');
 
-          // Update status glow on the article card
+          // Status glow on card
           const card = document.querySelector('#graph-card');
           if (card) {
             card.classList.toggle('critical-bg', data.status === 'critical');
@@ -272,7 +297,7 @@
         fetchAndUpdate();  // immediate update, no waiting for next tick
       };
 
-      // ── Zoom toggle (pure client-side, no network round-trip) ─────────
+      // ── Zoom toggle (still useful for future label detail) ────────────
       window.setZoom = function (mode) {
         currentZoom = mode;
         document.getElementById('btn-flat').className   = mode === 'flat'   ? 'chip primary' : 'chip outline';
@@ -280,8 +305,23 @@
         fetchAndUpdate();
       };
 
+      // ── History search ─────────────────────────────────────────────────
+      window.searchHistory = function () {
+        const val = document.getElementById('history-search-input').value.trim();
+        if (!val) return;
+        htmx.ajax('GET', `/api/history?search_id=${encodeURIComponent(val)}`, {
+          target: '#history-body', swap: 'outerHTML'
+        });
+      };
+      window.resetHistory = function () {
+        document.getElementById('history-search-input').value = '';
+        htmx.ajax('GET', '/api/history', { target: '#history-body', swap: 'outerHTML' });
+      };
+
       // ── Chart.js initialisation ────────────────────────────────────────
-      function initChart() {
+      function initChart(warnPct, critPct) {
+        warnPct = warnPct || 60;
+        critPct = critPct || 70;
         const ctx = document.getElementById('arduno-chart').getContext('2d');
         chart = new Chart(ctx, {
           data: {
@@ -323,6 +363,49 @@
             interaction: { mode: 'index', intersect: false },
             plugins: {
               legend: { display: false },
+              annotation: {
+                annotations: {
+                  // Background zone fills
+                  safeZone: {
+                    type: 'box', yMin: 0, yMax: warnPct,
+                    backgroundColor: 'rgba(76,175,80,0.06)',
+                    borderWidth: 0,
+                  },
+                  warnZone: {
+                    type: 'box', yMin: warnPct, yMax: critPct,
+                    backgroundColor: 'rgba(255,193,7,0.08)',
+                    borderWidth: 0,
+                  },
+                  critZone: {
+                    type: 'box', yMin: critPct, yMax: 100,
+                    backgroundColor: 'rgba(244,67,54,0.08)',
+                    borderWidth: 0,
+                  },
+                  // Threshold lines
+                  warnLine: {
+                    type: 'line', yMin: warnPct, yMax: warnPct,
+                    borderColor: 'rgba(255,193,7,0.55)',
+                    borderWidth: 1, borderDash: [5, 4],
+                    label: {
+                      display: true, content: 'Cảnh báo 60%',
+                      position: 'end', color: 'rgba(255,193,7,0.85)',
+                      font: { family: 'Outfit', size: 10 },
+                      backgroundColor: 'transparent', padding: 0,
+                    },
+                  },
+                  critLine: {
+                    type: 'line', yMin: critPct, yMax: critPct,
+                    borderColor: 'rgba(244,67,54,0.65)',
+                    borderWidth: 1, borderDash: [5, 4],
+                    label: {
+                      display: true, content: 'Nguy hiểm 70%',
+                      position: 'end', color: 'rgba(244,67,54,0.9)',
+                      font: { family: 'Outfit', size: 10 },
+                      backgroundColor: 'transparent', padding: 0,
+                    },
+                  },
+                },
+              },
               tooltip: {
                 backgroundColor: '#16181d',
                 borderColor:     'rgba(255,255,255,0.13)',
@@ -377,8 +460,8 @@
       }
 
       // ── Bootstrap ─────────────────────────────────────────────────────
-      // Init chart immediately on DOM ready, then poll every 5 s
-      initChart();
+      // Init chart with default thresholds; fetchAndUpdate will refine them
+      initChart(60, 70);
       fetchAndUpdate();
       pollTimer = setInterval(fetchAndUpdate, 5000);
 
