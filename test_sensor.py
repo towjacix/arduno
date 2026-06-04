@@ -439,10 +439,134 @@ class TestFullCycle:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Standalone runner (không cần pytest)
+# LIVE DATA INJECTOR — gửi dữ liệu thật tới Turso qua Vercel API
+# Dùng khi muốn xem graph thay đổi live mà chưa có Arduino thật.
+#
+# Cách chạy:
+#   python test_sensor.py --inject
+#   python test_sensor.py --inject --url https://your-project.vercel.app
+#   MONITOR_URL=https://your-project.vercel.app python test_sensor.py --inject
+# ═══════════════════════════════════════════════════════════════════════════
+
+import os
+import random
+import sys
+import time
+
+import requests as _requests
+
+
+class LiveInjector:
+    """Gửi dữ liệu cảm biến giả lập tới Vercel API thật → ghi vào Turso DB."""
+
+    def __init__(self, base_url: str):
+        self.url = base_url.rstrip("/") + "/api/monitor"
+        print(f"\n{C}{'═' * 62}")
+        print("   LIVE DATA INJECTOR — Lab Safety Monitor")
+        print(f"   Target: {self.url}")
+        print(f"{'═' * 62}{X}\n")
+
+    def _post(self, temp: float, smoke: int, tag: str) -> str:
+        """Gửi 1 mẫu dữ liệu. Trả về status trả về từ server."""
+        try:
+            r = _requests.post(
+                self.url,
+                json={"temp": round(temp, 1), "smoke": smoke},
+                timeout=10,
+            )
+            status = r.json().get("status", "?").upper()
+            color = R if status == "CRITICAL" else G
+            print(
+                f"  [{tag:<12}] T={Y}{temp:5.1f}°C{X}  S={Y}{smoke:4d} ADC{X}  "
+                f"→ {color}{status}{X}"
+            )
+            return status
+        except _requests.exceptions.ConnectionError:
+            print(f"  [{tag}] {R}Connection error — kiểm tra MONITOR_URL{X}")
+            return "error"
+        except Exception as e:
+            print(f"  [{tag}] {R}{e}{X}")
+            return "error"
+
+    def run_ambient_seed(self, n: int = 15):
+        """Phase 1: Gửi n mẫu nhiệt độ phòng để DMA học ngưỡng ổn định."""
+        print(f"{G}[Phase 1] Ambient seeding ({n} samples × 2s)…{X}")
+        for _ in range(n):
+            t = round(random.uniform(27.0, 30.5), 1)
+            s = random.randint(70, 120)
+            self._post(t, s, "AMBIENT")
+            time.sleep(2)
+
+    def run_fire_peak(self, n: int = 12):
+        """Phase 2: Nhiệt & khói tăng dần — tạo incident + cập nhật peak."""
+        print(f"\n{R}[Phase 2] Fire escalation ({n} samples × 2s)…{X}")
+        for i in range(n):
+            t = round(42.0 + i * 2.8, 1)   # 42°C → ~74°C
+            s = 280 + i * 58               # 280 → ~956 ADC
+            self._post(t, s, "FIRE-ALERT")
+            time.sleep(2)
+
+    def run_cooldown(self, n: int = 12):
+        """Phase 3: Hạ nhiệt & khói tan — hệ thống phải bẻ về safe."""
+        print(f"\n{Y}[Phase 3] Cooldown ({n} samples × 2s)…{X}")
+        for i in range(n):
+            t = round(72.0 - i * 3.8, 1)  # ~72°C → ~26°C
+            s = max(50, 900 - i * 75)     # ~900 → 50 ADC
+            self._post(t, s, "COOL-DOWN")
+            time.sleep(2)
+
+    def run_single_cycle(self):
+        """Chạy đủ 1 chu kỳ: ambient → cháy → hạ nhiệt → safe."""
+        self.run_ambient_seed(15)
+        self.run_fire_peak(12)
+        self.run_cooldown(12)
+        print(f"\n{G}✓ Cycle complete — kiểm tra graph trên dashboard!{X}")
+
+    def run_infinite(self):
+        """Chạy vô hạn, lặp từng chu kỳ. Ctrl+C để dừng."""
+        print(f"Nhấn {Y}Ctrl+C{X} để dừng.\n")
+        cycle = 1
+        try:
+            while True:
+                print(f"{C}─── Chu kỳ #{cycle} ───{X}")
+                self.run_single_cycle()
+                print(f"  Nghỉ 3s rồi lặp lại...\n")
+                cycle += 1
+                time.sleep(3)
+        except KeyboardInterrupt:
+            print(f"\n{Y}Dừng injector an toàn.{X}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Standalone runner
 # ═══════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    args = sys.argv[1:]
+
+    # ── Chế độ inject ────────────────────────────────────────────────────
+    if "--inject" in args:
+        # Lấy URL từ --url flag hoặc env var MONITOR_URL
+        url_idx = args.index("--url") + 1 if "--url" in args else None
+        base_url = (
+            args[url_idx]
+            if url_idx and url_idx < len(args)
+            else os.getenv("MONITOR_URL", "")
+        )
+        if not base_url:
+            print(f"{R}Lỗi: Cần truyền URL qua --url hoặc biến môi trường MONITOR_URL{X}")
+            print(f"  Ví dụ: python test_sensor.py --inject --url https://your-project.vercel.app")
+            sys.exit(1)
+
+        infinite = "--loop" in args
+        injector = LiveInjector(base_url)
+        if infinite:
+            injector.run_infinite()
+        else:
+            injector.run_single_cycle()
+        sys.exit(0)
+
+    # ── Chế độ unit test standalone ──────────────────────────────────────
     print(f"\n{C}{'═' * 60}")
     print("   LAB SAFETY MONITOR — Integration Tests")
     print(f"{'═' * 60}{X}\n")
@@ -479,3 +603,4 @@ if __name__ == "__main__":
     print(f"\n{C}{'─' * 60}{X}")
     color = G if failed == 0 else R
     print(f"{color}Results: {passed}/{total} passed, {failed} failed{X}\n")
+    print(f"{C}Tip: dùng --inject --url <vercel-url> để inject data thật vào Turso.{X}\n")
