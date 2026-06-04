@@ -38,22 +38,22 @@ def _build_svg(
     times: list[str],
     zoom: str,
 ) -> str:
-    """Vẽ combo chart: khói dạng Bar (blue rects) + nhiệt độ dạng Bezier Line (orange-red).
-    Cả 2 normalize 0-100% trên cùng 1 trục Y.
+    """Combo chart: khói dạng Bar + nhiệt độ dạng Bezier Line, cả 2 normalized 0-100%.
+    Tooltip CSS-only: hover vào cột sẽ hiện card với timestamp + giá trị gốc + %.
     """
     chart_w = _W - _PAD_L - _PAD_R
     chart_h = _H - _PAD_T - _PAD_B
-    y_base = _H - _PAD_B
-    n = len(points_t)
+    y_base  = _H - _PAD_B
+    n       = len(points_t)
 
     # ── 1. Normalize nhiệt độ ─────────────────────────────────────────────
     min_span_t = 2.0 if zoom == "detail" else 10.0
     min_t, max_t = min(points_t), max(points_t)
     span_t = max_t - min_t
     if span_t < min_span_t:
-        diff = min_span_t - span_t
-        min_t = max(0.0, min_t - diff / 2.0)
-        max_t = min_t + min_span_t
+        diff   = min_span_t - span_t
+        min_t  = max(0.0, min_t - diff / 2.0)
+        max_t  = min_t + min_span_t
         span_t = min_span_t
     norm_t = [(v - min_t) / span_t * 100.0 for v in points_t]
 
@@ -62,27 +62,36 @@ def _build_svg(
     min_s, max_s = 0.0, max(points_s) if points_s else 300.0
     span_s = max_s - min_s
     if span_s < min_span_s:
-        max_s = min_s + min_span_s
+        max_s  = min_s + min_span_s
         span_s = min_span_s
     norm_s = [min(100.0, (s - min_s) / span_s * 100.0) for s in points_s]
 
-    # ── 3. Helpers vị trí ─────────────────────────────────────────────────
+    # ── 3. Helpers ────────────────────────────────────────────────────────
     def xc(i: int) -> float:
-        """Tâm X của điểm i."""
         return _PAD_L + (i / (n - 1)) * chart_w if n > 1 else _PAD_L + chart_w / 2
 
     def yp(pct: float) -> float:
-        """Y từ 0-100% (0% = đáy, 100% = đỉnh)."""
         return y_base - (pct / 100.0) * chart_h
 
-    # ── 4. Màu sắc ────────────────────────────────────────────────────────
+    # ── 4. Màu ───────────────────────────────────────────────────────────
     COL_TEMP  = "#ff5722"
     COL_SMOKE = "#2196f3"
     COL_GRID  = "rgba(255,255,255,0.10)"
     COL_TEXT  = "#9e9e9e"
     COL_AX    = "#37474f"
 
-    # ── 5. Grid lines ngang (0%, 50%, 100%) ──────────────────────────────
+    # ── 5. Embedded CSS (HTMX-safe vì nằm trong SVG) ──────────────────────
+    # Tooltip card ẩn mặc định, hiện khi hover vào .tip-col
+    TT_W, TT_H = 200, 78   # kích thước tooltip card
+    css = (
+        "<style>"
+        ".tip-col .tt{display:none;pointer-events:none;}"
+        ".tip-col:hover .tt{display:block;}"
+        ".tip-col:hover .hit-bg{fill:rgba(255,255,255,0.04);}"
+        "</style>"
+    )
+
+    # ── 6. Grid lines ─────────────────────────────────────────────────────
     y_ticks = {100: "100%", 50: "50%", 0: "0%"}
     grids = ""
     for pct, lbl in y_ticks.items():
@@ -94,50 +103,86 @@ def _build_svg(
             f'fill="{COL_TEXT}" font-size="11" font-family="Outfit,sans-serif">{lbl}</text>'
         )
 
-    # ── 6. Smoke bars (rect) ──────────────────────────────────────────────
-    bar_gap = 0.18          # tỷ lệ khoảng cách giữa các bar
-    slot_w  = chart_w / n if n > 1 else chart_w
-    bar_w   = max(2.0, slot_w * (1 - bar_gap))
-    bars = ""
-    for i, pct in enumerate(norm_s):
-        bh  = pct / 100.0 * chart_h
-        bx  = _PAD_L + (i / n) * chart_w + (slot_w - bar_w) / 2
-        by  = y_base - bh
-        tip = f"{points_s[i]:.0f} ADC"
-        bars += (
-            f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bar_w:.1f}" height="{bh:.1f}" '
-            f'rx="2" fill="{COL_SMOKE}" fill-opacity="0.75">'
-            f'<title>{tip}</title></rect>'
-        )
-
-    # ── 7. Temperature Bezier line + area fill ────────────────────────────
+    # ── 7. Bezier path nhiệt độ (vẽ dưới các cột hover) ──────────────────
     coords_t = [(xc(i), yp(p)) for i, p in enumerate(norm_t)]
     path_d   = _bezier_path(coords_t)
     x0, xn_  = coords_t[0][0], coords_t[-1][0]
 
-    # Vùng fill phía dưới đường nhiệt độ (rất nhẹ)
     fill_area = (
         f'<path d="{path_d} L {xn_:.1f},{y_base} L {x0:.1f},{y_base} Z" '
-        f'fill="{COL_TEMP}" fill-opacity="0.08" stroke="none"/>'
+        f'fill="{COL_TEMP}" fill-opacity="0.07" stroke="none"/>'
     )
-    # Đường chính
     line_temp = (
         f'<path d="{path_d}" fill="none" stroke="{COL_TEMP}" '
         f'stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>'
     )
-    # Dots tại mỗi điểm đo
-    dots = ""
-    for i, (cx_, cy_) in enumerate(coords_t):
-        r    = 4.5 if norm_t[i] == max(norm_t) else 3.0
-        tip  = f"{points_t[i]:.1f}°C"
-        dots += (
-            f'<circle cx="{cx_:.1f}" cy="{cy_:.1f}" r="{r}" '
-            f'fill="{COL_TEMP}" stroke="#1e1e20" stroke-width="1.2">'
-            f'<title>{tip}</title></circle>'
+
+    # ── 8. Column groups: hit zone + bar + dot + tooltip card ─────────────
+    slot_w = chart_w / n if n > 1 else chart_w
+    bar_w  = max(2.0, slot_w * 0.82)
+    cols   = ""
+
+    for i in range(n):
+        cx_   = xc(i)
+        cy_   = coords_t[i][1]
+        pct_s = norm_s[i]
+        pct_t = norm_t[i]
+        bh    = pct_s / 100.0 * chart_h
+        bx    = _PAD_L + (i / n) * chart_w + (slot_w - bar_w) / 2
+        by    = y_base - bh
+        r_dot = 4.5 if pct_t == max(norm_t) else 3.0
+
+        # ── Tooltip card position (clamp để không tràn ra ngoài) ──────────
+        tt_x = max(_PAD_L, min(cx_ - TT_W / 2, _W - _PAD_R - TT_W))
+        tt_y = _PAD_T + 2   # luôn gắn lên đầu chart
+
+        # ── Nội dung tooltip ──────────────────────────────────────────────
+        tt_time  = times[i]
+        tt_temp  = f"{points_t[i]:.1f}\u00b0C ({pct_t:.0f}%)"
+        tt_smoke = f"{points_s[i]:.0f} ADC ({pct_s:.0f}%)"
+
+        tooltip = (
+            f'<g class="tt" transform="translate({tt_x:.1f},{tt_y:.1f})">'
+            # Shadow
+            f'<rect x="2" y="2" width="{TT_W}" height="{TT_H}" rx="8" '
+            f'fill="rgba(0,0,0,0.45)"/>'
+            # Card background
+            f'<rect width="{TT_W}" height="{TT_H}" rx="8" '
+            f'fill="#16181d" stroke="rgba(255,255,255,0.13)" stroke-width="1"/>'
+            # Timestamp header
+            f'<text x="12" y="22" fill="#ffffff" font-size="13" '
+            f'font-weight="600" font-family="Outfit,sans-serif">{tt_time}</text>'
+            # Divider
+            f'<line x1="12" y1="30" x2="{TT_W - 12}" y2="30" '
+            f'stroke="rgba(255,255,255,0.10)" stroke-width="1"/>'
+            # Temp row: icon + label
+            f'<rect x="12" y="38" width="10" height="10" rx="2" fill="{COL_TEMP}"/>'
+            f'<text x="28" y="48" fill="#e0e0e0" font-size="11.5" '
+            f'font-family="Outfit,sans-serif">Nhi\u1ec7t \u0111\u1ed9: {tt_temp}</text>'
+            # Smoke row: icon + label
+            f'<rect x="12" y="56" width="10" height="10" rx="2" fill="{COL_SMOKE}"/>'
+            f'<text x="28" y="66" fill="#e0e0e0" font-size="11.5" '
+            f'font-family="Outfit,sans-serif">Kh\u00f3i: {tt_smoke}</text>'
+            f'</g>'
         )
 
-    # ── 8. Trục X ─────────────────────────────────────────────────────────
-    # Hiển thị tối đa 10 nhãn, ưu tiên đầu / đuôi / đều đặn
+        cols += (
+            f'<g class="tip-col">'
+            # Hit zone: full-height transparent rect kích hoạt hover
+            f'<rect class="hit-bg" x="{bx:.1f}" y="{_PAD_T}" '
+            f'width="{bar_w:.1f}" height="{chart_h + 4}" rx="3" fill="transparent"/>'
+            # Smoke bar
+            f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bar_w:.1f}" height="{bh:.1f}" '
+            f'rx="2" fill="{COL_SMOKE}" fill-opacity="0.75"/>'
+            # Temperature dot
+            f'<circle cx="{cx_:.1f}" cy="{cy_:.1f}" r="{r_dot}" '
+            f'fill="{COL_TEMP}" stroke="#1e1e20" stroke-width="1.5"/>'
+            # Tooltip card
+            f'{tooltip}'
+            f'</g>'
+        )
+
+    # ── 9. Trục X ─────────────────────────────────────────────────────────
     step   = max(1, n // 10)
     x_axis = (
         f'<line x1="{_PAD_L}" y1="{y_base}" x2="{_W - _PAD_R}" y2="{y_base}" '
@@ -152,14 +197,17 @@ def _build_svg(
             f'fill="{COL_TEXT}" font-size="11" font-family="Outfit,sans-serif">{t}</text>'
         )
 
-    # ── 9. Assemble SVG ───────────────────────────────────────────────────
+    # ── 10. Assemble SVG ──────────────────────────────────────────────────
     return (
         f'<svg viewBox="0 0 {_W} {_H}" xmlns="http://www.w3.org/2000/svg" '
         f'style="width:100%;height:auto;display:block;overflow:visible;">'
-        f"{grids}{bars}{fill_area}{line_temp}{dots}{x_axis}"
+        f"{css}"
+        f"{grids}"
+        f"{fill_area}{line_temp}"
+        f"{cols}"
+        f"{x_axis}"
         f"</svg>"
     )
-
 
 
 
