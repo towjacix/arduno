@@ -82,20 +82,14 @@ def _build_svg(
     COL_TEXT  = "#9e9e9e"
     COL_AX    = "#37474f"
 
-    # ── 5. Grid lines ngang (0%, 25%, 50%, 75%, 100%) ─────────────────────
-    mid_t = (max_t + min_t) / 2.0
-    y_ticks = {
-        100: f"{max_t:.0f}°C",
-        50:  f"{mid_t:.0f}°C",
-        0:   f"{min_t:.0f}°C",
-    }
+    # ── 5. Grid lines ngang (0%, 50%, 100%) ──────────────────────────────
+    y_ticks = {100: "100%", 50: "50%", 0: "0%"}
     grids = ""
     for pct, lbl in y_ticks.items():
         yg = yp(float(pct))
-        dash = "4,4" if pct in (25, 75) else "6,4"
         grids += (
             f'<line x1="{_PAD_L}" y1="{yg:.1f}" x2="{_W - _PAD_R}" y2="{yg:.1f}" '
-            f'stroke="{COL_GRID}" stroke-dasharray="{dash}"/>'
+            f'stroke="{COL_GRID}" stroke-dasharray="6,4"/>'
             f'<text x="{_PAD_L - 6}" y="{yg + 4:.1f}" text-anchor="end" '
             f'fill="{COL_TEXT}" font-size="11" font-family="Outfit,sans-serif">{lbl}</text>'
         )
