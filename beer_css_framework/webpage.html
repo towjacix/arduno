@@ -432,14 +432,7 @@
                   color: function (ctx) {
                     return tickColor(ctx.tick.value, false);
                   },
-                  font: function (ctx) {
-                    // Bold the tick at the current peak band
-                    const v = ctx.tick.value;
-                    const tempBand  = Math.floor(peakTempPct  / 10) * 10;
-                    const smokeBand = Math.floor(peakSmokePct / 10) * 10;
-                    const isPeak = (v === tempBand || v === smokeBand);
-                    return { family: 'Outfit', size: isPeak ? 12 : 11, weight: isPeak ? '700' : '400' };
-                  },
+                  font: { family: 'Outfit', size: 11 },
                   callback: v => v + '%',
                   stepSize: 10,
                 },
@@ -461,7 +454,6 @@
       }
 
       // ── Bootstrap ─────────────────────────────────────────────────────
-      // Init chart with default thresholds; fetchAndUpdate will refine them
       initChart();
       fetchAndUpdate();
       pollTimer = setInterval(fetchAndUpdate, 5000);
