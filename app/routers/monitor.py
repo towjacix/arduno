@@ -147,7 +147,30 @@ async def monitor_system(data: MonitorPayload):
         "current_dynamic_threshold=? WHERE id=1",
         [new_status, now, data.temp, data.smoke, threshold],
     )
-    return {"status": new_status}
+    # ── Level classification (for Arduino buzzer) ─────────────────────────
+    # Uses the same fixed scale ceilings as the chart JS:
+    #   temp  ceiling = 70°C   (critical threshold / 0.70)
+    #   smoke ceiling = 500 ADC
+    # Level: safe < 60% | warning 60–70% | critical > 70%
+    _temp_ceil  = float(CONFIG.get_nested("ui", "graph", "temp_scale_max",  default=70))
+    _smoke_ceil = float(CONFIG.get_nested("ui", "graph", "smoke_scale_max", default=500))
+    temp_pct  = min(100.0, data.temp  / _temp_ceil  * 100.0)
+    smoke_pct = min(100.0, data.smoke / _smoke_ceil * 100.0)
+    peak_pct  = max(temp_pct, smoke_pct)
+
+    if peak_pct >= 70.0:
+        level = "critical"
+    elif peak_pct >= 60.0:
+        level = "warning"
+    else:
+        level = "safe"
+
+    return {
+        "status":    new_status,
+        "level":     level,          # "safe" | "warning" | "critical"
+        "temp_pct":  round(temp_pct,  1),
+        "smoke_pct": round(smoke_pct, 1),
+    }
 
 
 @router.get("/api/status", response_class=HTMLResponse)
