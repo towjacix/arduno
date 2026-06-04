@@ -4,29 +4,41 @@ A cloud-native IoT fire and smoke monitoring system. An Arduino Uno reads temper
 
 ---
 
-## Architecture
+## 🏗️ Architecture
 
 ```
 Arduino Uno + ESP-01S
         │  (HTTP POST every 2s via AT commands)
         ▼
-  Vercel Serverless
+   Vercel Serverless
   ┌─────────────────────────────────┐
   │  FastAPI  (api/index.py)        │
   │  ├── POST /api/monitor          │  ← sensor data ingestion
   │  ├── GET  /api/status           │  ← live status cards (HTMX)
-  │  ├── GET  /api/history          │  ← incident log (HTMX)
-  │  └── GET  /api/analytics/graph  │  ← SVG chart (HTMX)
+  │  ├── GET  /api/history          │  ← incident log & search (HTMX)
+  │  └── GET  /api/analytics/data   │  ← JSON telemetry for Chart.js
   └──────────────┬──────────────────┘
                  │
            Turso Edge DB (LibSQL)
 ```
 
-The frontend is a single HTML file served at `/`. It uses **Beer CSS** for styling and **HTMX** for live updates — no JavaScript framework, no build step.
+The frontend is a single HTML file served at `/`. It uses **Beer CSS** for styling, **HTMX** for live DOM updates, and **Chart.js** for real-time telemetry rendering.
 
 ---
 
-## Hardware
+## 🧠 Algorithms & Logic
+
+Arduno doesn't just read sensors; it analyzes them intelligently using:
+- **Dynamic Moving Average (DMA)** to auto-baseline ambient temperatures.
+- **Hysteresis** to prevent state flickering.
+- **Fixed-Scale Normalization** for rock-solid UI charting without visual jumps.
+- **Three-Tier Classification** (Safe, Warning, Critical) to drive Arduino buzzer Morse code alerts.
+
+👉 **Read the full breakdown in [docs/algorithm.md](docs/algorithm.md)**
+
+---
+
+## 🔌 Hardware
 
 | Component | Role | Pin |
 |-----------|------|-----|
@@ -34,6 +46,7 @@ The frontend is a single HTML file served at `/`. It uses **Beer CSS** for styli
 | ESP-01S (ESP8266) | WiFi via AT commands | D2 (RX), D3 (TX) |
 | DHT22 | Temperature & humidity | D4 |
 | MQ-2 | Smoke / gas (raw ADC) | A0 |
+| Buzzer (Active/Passive)| Morse code alerts | D5 |
 
 ### Wiring diagram
 
@@ -49,6 +62,7 @@ GND     ──────────  GND
 
 DHT22: DATA → D4 | VCC → 5V | GND → GND
 MQ-2:  AOUT → A0 | VCC → 5V | GND → GND
+BUZZ:  (+)  → D5 | (-) → GND
 ```
 
 > ⚠️ The ESP-01S runs on **3.3V**. Never connect VCC directly to Arduino's 5V pin.
@@ -56,7 +70,7 @@ MQ-2:  AOUT → A0 | VCC → 5V | GND → GND
 
 ---
 
-## Database schema
+## 🗄️ Database Schema
 
 ```sql
 CREATE TABLE system_state (
@@ -89,7 +103,7 @@ INSERT INTO system_state VALUES (1, 'safe', 0, 0, 45, '');
 
 ---
 
-## Configuration
+## ⚙️ Configuration
 
 Edit `config/config.toml`:
 
@@ -103,7 +117,6 @@ temp_offset = 10
 window_size = 10   # number of samples (1 sample = 2s → 20s window)
 
 # Hysteresis: prevents state flicker when temp sits at the boundary.
-# System only returns to "safe" when temp drops below (threshold - hysteresis).
 hysteresis = 2
 
 [threshold.default]
@@ -111,16 +124,13 @@ temp  = 45    # °C — used in manual mode or as cold-start fallback
 smoke = 300   # MQ-2 raw ADC value (normal air: 80–150, fire: >300)
 
 [ui.graph]
-width        = 800
-height       = 200
-max_points   = 50
-stroke_color = "#ff3d00"
-fill_opacity = 0.1
+temp_scale_max  = 70   # Fixed chart ceiling for temp (45 / 0.7)
+smoke_scale_max = 500  # Fixed chart ceiling for smoke (300 / 0.7)
 ```
 
 ---
 
-## Local development
+## 🚀 Local Development
 
 ### Requirements
 
@@ -160,7 +170,7 @@ The dashboard is then available at `http://localhost:8000`.
 
 ---
 
-## Deployment (Vercel)
+## ☁️ Deployment (Vercel)
 
 ```bash
 npm i -g vercel
@@ -178,26 +188,10 @@ The `vercel.json` already routes all `/api/*` requests and `/` to the FastAPI ap
 
 ---
 
-## How the threshold algorithm works
+## 📁 Project Structure
 
-In `auto` mode the system uses a **Dynamic Moving Average (DMA)**:
-
-```
-threshold = AVG(last N safe readings) + temp_offset
-```
-
-Readings taken during a fire (`temp ≥ current_dynamic_threshold`) are excluded from the average, so the threshold doesn't drift upward during an incident. `N` is controlled by `window_size` in config.
-
-**Hysteresis** prevents the system from rapidly toggling between states when temperature floats exactly at the threshold:
-- Transition to `critical`: `temp > threshold` OR `smoke > smoke_limit`
-- Transition back to `safe`: `temp ≤ threshold − hysteresis` AND `smoke ≤ smoke_limit`
-
----
-
-## Project structure
-
-```
-arduno-main/
+```text
+arduno/
 ├── api/
 │   └── index.py              # FastAPI app entry point (Vercel handler)
 ├── app/
@@ -205,12 +199,14 @@ arduno-main/
 │   ├── database.py           # Turso LibSQL client
 │   ├── schemas.py            # Pydantic request/response models
 │   └── routers/
-│       ├── monitor.py        # POST /api/monitor, GET /api/status, /api/history
-│       └── graph.py          # GET /api/analytics/graph/{incident_id}
+│       ├── monitor.py        # /api/monitor, /api/status, /api/history
+│       └── graph.py          # /api/analytics/data/{incident_id}
 ├── beer_css_framework/
-│   └── webpage.html          # Single-page dashboard (Beer CSS + HTMX)
+│   └── webpage.html          # Single-page dashboard (Beer CSS + HTMX + Chart.js)
 ├── config/
 │   └── config.toml           # Runtime configuration
+├── docs/
+│   └── algorithm.md          # Core algorithms documentation
 ├── arduno.ino                # Arduino Uno + ESP-01S firmware
 ├── requirements.txt
 └── vercel.json
