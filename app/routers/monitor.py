@@ -261,9 +261,7 @@ async def get_history_html(offset: int = 0, limit: int = 20):
         btn_label = "LIVE" if end_time == "Active" else "DONE"
 
         rows.append(
-            f"<tr style='cursor:pointer;' "
-            f"hx-get='/api/analytics/graph/{inc_id}' "
-            f"hx-target='.graph-wrapper' hx-swap='outerHTML'>"
+            f"<tr style='cursor:pointer;' onclick='loadIncident({inc_id})'>"
             f"<td>#{inc_id}</td><td>{start_time}</td><td>{end_time}</td>"
             f"<td>{peak_temp:.1f}°C</td>"
             f"<td><button class='chip {btn_class}'>{btn_label}</button></td></tr>"
