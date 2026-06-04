@@ -361,20 +361,24 @@ class TestHistoryAPI:
 
 
 class TestGraphAPI:
-    """Test /api/analytics/graph endpoints."""
+    """Test /api/analytics/data endpoints (JSON, replaces old SVG endpoint)."""
 
     def setup_method(self):
         _reset_state()
 
-    def test_graph_latest_empty(self):
-        """Latest graph trống hiển thị thông báo."""
-        resp = client.get("/api/analytics/graph/latest")
+    def test_graph_data_latest_empty(self):
+        """Latest data with no logs returns empty arrays."""
+        resp = client.get("/api/analytics/data/latest")
         assert resp.status_code == 200
-        assert "Chưa có dữ liệu" in resp.text
-        print(f"{C}✓ Empty graph shows no-data message{X}")
+        body = resp.json()
+        assert body["times"]  == []
+        assert body["temp"]   == []
+        assert body["smoke"]  == []
+        assert body["status"] == "safe"
+        print(f"{C}✓ Empty data endpoint returns empty arrays{X}")
 
-    def test_graph_latest_with_data(self):
-        """Latest graph có dữ liệu render SVG."""
+    def test_graph_data_latest_with_data(self):
+        """Latest data returns correct JSON shape with readings."""
         for i in range(5):
             _logs.append({
                 "incident_id": 0,
@@ -382,30 +386,39 @@ class TestGraphAPI:
                 "temp": 28.0 + i * 0.5,
                 "smoke": 80 + i * 10,
             })
-        resp = client.get("/api/analytics/graph/latest")
+        resp = client.get("/api/analytics/data/latest")
         assert resp.status_code == 200
-        assert "<svg" in resp.text
-        print(f"{G}✓ Graph renders SVG with data{X}")
+        body = resp.json()
+        assert len(body["times"])  == 5
+        assert len(body["temp"])   == 5
+        assert len(body["smoke"])  == 5
+        assert body["temp"][0]     == pytest.approx(28.0)
+        assert body["smoke"][0]    == 80
+        assert "status" in body
+        print(f"{G}✓ Data endpoint returns correct JSON arrays{X}")
 
-    def test_graph_invalid_id(self):
-        """Invalid incident ID trả về lỗi 400."""
-        resp = client.get("/api/analytics/graph/abc")
+    def test_graph_data_invalid_id(self):
+        """Invalid incident ID returns 400."""
+        resp = client.get("/api/analytics/data/abc")
         assert resp.status_code == 400
-        print(f"{Y}✓ Invalid graph ID returns 400{X}")
+        print(f"{Y}✓ Invalid data ID returns 400{X}")
 
-    def test_graph_zoom_detail(self):
-        """Zoom=detail thay đổi span tối thiểu."""
-        for i in range(5):
+    def test_graph_data_incident_id(self):
+        """History mode returns data for specific incident_id."""
+        for i in range(3):
             _logs.append({
-                "incident_id": 0,
-                "timestamp": f"2025-01-01 12:0{i}:00",
-                "temp": 28.0,
-                "smoke": 80,
+                "incident_id": 7,
+                "timestamp": f"2025-01-01 13:0{i}:00",
+                "temp": 55.0 + i,
+                "smoke": 400 + i * 20,
             })
-        resp = client.get("/api/analytics/graph/latest?zoom=detail")
+        resp = client.get("/api/analytics/data/7")
         assert resp.status_code == 200
-        assert "<svg" in resp.text
-        print(f"{G}✓ Detail zoom renders correctly{X}")
+        body = resp.json()
+        assert len(body["temp"])  == 3
+        assert body["temp"][0]    == pytest.approx(55.0)
+        assert body["incident_id"] == "7"
+        print(f"{G}✓ History data endpoint returns incident-specific rows{X}")
 
 
 class TestIndexPage:

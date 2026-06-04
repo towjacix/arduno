@@ -16,6 +16,7 @@
       src="https://cdn.jsdelivr.net/npm/beercss@3.5.1/dist/cdn/beer.min.js"
     ></script>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
     <link
       rel="icon"
       href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔥</text></svg>"
@@ -43,8 +44,8 @@
         box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
         border-color: rgba(255, 255, 255, 0.15) !important;
       }
-      .graph-wrapper svg {
-        width: 100%;
+      .graph-wrapper canvas {
+        width: 100% !important;
         height: auto;
         display: block;
       }
@@ -99,16 +100,28 @@
               <div class="max"><h5>Diễn biến sự cố (Thời gian thực)</h5></div>
               <button class="chip primary">LIVE</button>
             </div>
-            <div
-              class="graph-wrapper margin"
-              hx-get="/api/analytics/graph/latest"
-              hx-trigger="load"
-              hx-swap="outerHTML"
-            >
-              <div class="center-align padding">
-                <progress class="circle"></progress>
-                <p>Đang kết nối tới máy chủ vẽ đồ thị...</p>
+            <div class="graph-wrapper margin">
+              <!-- ── Legend + controls row ── -->
+              <div class="row" style="gap:6px;justify-content:space-between;margin-bottom:10px;align-items:center;">
+                <div style="display:flex;gap:14px;font-size:12px;color:#9e9e9e;">
+                  <span style="display:flex;align-items:center;gap:5px;">
+                    <span style="width:18px;height:3px;background:#ff5722;border-radius:2px;display:inline-block;"></span>
+                    Nhiệt độ (°C)
+                  </span>
+                  <span style="display:flex;align-items:center;gap:5px;">
+                    <span style="width:14px;height:14px;background:#2196f3;border-radius:2px;opacity:0.8;display:inline-block;"></span>
+                    Khói (ADC)
+                  </span>
+                </div>
+                <div style="display:flex;gap:6px;align-items:center;">
+                  <span id="incident-label" style="font-size:12px;color:#9e9e9e;"></span>
+                  <button id="btn-live" class="chip primary" onclick="loadIncident('latest')">LIVE</button>
+                  <button id="btn-flat" class="chip primary" onclick="setZoom('flat')">Mặc định</button>
+                  <button id="btn-detail" class="chip outline" onclick="setZoom('detail')">Zoom</button>
+                </div>
               </div>
+              <!-- ── Chart canvas ── -->
+              <canvas id="arduno-chart" height="260"></canvas>
             </div>
           </article>
         </div>
@@ -174,8 +187,200 @@
           class="margin"
           alt="Turso"
         />
-        <span class="italic">Powered by Turso Edge DB & Vercel Serverless</span>
+        <span class="italic">Powered by Turso Edge DB &amp; Vercel Serverless</span>
       </div>
     </footer>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         CHART.JS CONTROLLER
+         Owns: polling, normalization, rendering, zoom, incident switching.
+         HTMX owns: status cards, history table rows.
+         Neither interferes with the other.
+    ══════════════════════════════════════════════════════════════════ -->
+    <script>
+    (function () {
+      'use strict';
+
+      // ── State ──────────────────────────────────────────────────────────
+      let currentIncidentId = 'latest';
+      let currentZoom       = 'flat';   // 'flat' | 'detail'
+      let rawTemp  = [];
+      let rawSmoke = [];
+      let chart    = null;
+      let pollTimer = null;
+
+      // ── Normalization (mirrors Python logic, runs in browser) ──────────
+      function normalize(arr, minSpan) {
+        if (!arr.length) return [];
+        let mn = Math.min(...arr);
+        let mx = Math.max(...arr);
+        let span = mx - mn;
+        if (span < minSpan) {
+          mn = Math.max(0, mn - (minSpan - span) / 2);
+          mx = mn + minSpan;
+          span = minSpan;
+        }
+        return arr.map(v => (v - mn) / span * 100);
+      }
+
+      // ── Fetch data + update chart ──────────────────────────────────────
+      async function fetchAndUpdate() {
+        try {
+          const res  = await fetch(`/api/analytics/data/${currentIncidentId}`);
+          if (!res.ok) return;
+          const data = await res.json();
+
+          rawTemp  = data.temp  || [];
+          rawSmoke = data.smoke || [];
+
+          const minSpanT = currentZoom === 'detail' ? 2  : 10;
+          const minSpanS = currentZoom === 'detail' ? 50 : 200;
+          const normT = normalize(rawTemp,  minSpanT);
+          const normS = normalize(rawSmoke, minSpanS);
+
+          if (!chart) initChart();
+
+          chart.data.labels           = data.times || [];
+          chart.data.datasets[0].data = normS;   // bars
+          chart.data.datasets[1].data = normT;   // line
+          chart.update('none');
+
+          // Update status glow on the article card
+          const card = document.querySelector('#graph-card');
+          if (card) {
+            card.classList.toggle('critical-bg', data.status === 'critical');
+          }
+        } catch (e) {
+          console.warn('chart fetch error', e);
+        }
+      }
+
+      // ── Switch to a specific incident (called by history row onclick) ──
+      window.loadIncident = function (id) {
+        currentIncidentId = String(id);
+        const lbl = document.getElementById('incident-label');
+        const btnLive = document.getElementById('btn-live');
+        if (id === 'latest') {
+          if (lbl)     lbl.textContent = '';
+          if (btnLive) btnLive.className = 'chip primary';
+        } else {
+          if (lbl)     lbl.textContent = `Sự cố #${id}`;
+          if (btnLive) btnLive.className = 'chip outline';
+        }
+        fetchAndUpdate();  // immediate update, no waiting for next tick
+      };
+
+      // ── Zoom toggle (pure client-side, no network round-trip) ─────────
+      window.setZoom = function (mode) {
+        currentZoom = mode;
+        document.getElementById('btn-flat').className   = mode === 'flat'   ? 'chip primary' : 'chip outline';
+        document.getElementById('btn-detail').className = mode === 'detail' ? 'chip primary' : 'chip outline';
+        fetchAndUpdate();
+      };
+
+      // ── Chart.js initialisation ────────────────────────────────────────
+      function initChart() {
+        const ctx = document.getElementById('arduno-chart').getContext('2d');
+        chart = new Chart(ctx, {
+          data: {
+            labels:   [],
+            datasets: [
+              // [0] Smoke — BAR
+              {
+                type:            'bar',
+                label:           'Khói',
+                data:            [],
+                backgroundColor: 'rgba(33,150,243,0.72)',
+                borderColor:     'rgba(33,150,243,0.0)',
+                borderRadius:    3,
+                order:           2,
+              },
+              // [1] Temperature — LINE
+              {
+                type:            'line',
+                label:           'Nhiệt độ',
+                data:            [],
+                borderColor:     '#ff5722',
+                backgroundColor: 'rgba(255,87,34,0.07)',
+                borderWidth:     2.4,
+                pointRadius:     3,
+                pointHoverRadius:5,
+                pointBackgroundColor: '#ff5722',
+                pointBorderColor:     '#1e1e20',
+                pointBorderWidth:     1.5,
+                tension:         0.4,
+                fill:            true,
+                order:           1,
+              },
+            ],
+          },
+          options: {
+            animation:   false,
+            responsive:  true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: '#16181d',
+                borderColor:     'rgba(255,255,255,0.13)',
+                borderWidth:     1,
+                titleColor:      '#ffffff',
+                titleFont:       { family: 'Outfit', size: 13, weight: '600' },
+                bodyColor:       '#e0e0e0',
+                bodyFont:        { family: 'Outfit', size: 12 },
+                padding:         12,
+                callbacks: {
+                  label: function (ctx) {
+                    const i   = ctx.dataIndex;
+                    const pct = ctx.parsed.y.toFixed(0);
+                    if (ctx.dataset.label === 'Khói') {
+                      const adc = rawSmoke[i] !== undefined ? rawSmoke[i].toFixed(0) : '—';
+                      return `  Khói: ${adc} ADC  (${pct}%)`;
+                    } else {
+                      const deg = rawTemp[i]  !== undefined ? rawTemp[i].toFixed(1)  : '—';
+                      return `  Nhiệt độ: ${deg}°C  (${pct}%)`;
+                    }
+                  },
+                },
+              },
+            },
+            scales: {
+              x: {
+                ticks: {
+                  color:      '#9e9e9e',
+                  font:       { family: 'Outfit', size: 11 },
+                  maxTicksLimit: 10,
+                  maxRotation: 0,
+                },
+                grid: { color: 'rgba(255,255,255,0.05)' },
+              },
+              y: {
+                min:  0,
+                max:  100,
+                ticks: {
+                  color:    '#9e9e9e',
+                  font:     { family: 'Outfit', size: 11 },
+                  callback: v => v + '%',
+                  stepSize: 50,
+                },
+                grid: {
+                  color:     'rgba(255,255,255,0.10)',
+                  lineWidth: 1,
+                },
+              },
+            },
+          },
+        });
+      }
+
+      // ── Bootstrap ─────────────────────────────────────────────────────
+      // Init chart immediately on DOM ready, then poll every 5 s
+      initChart();
+      fetchAndUpdate();
+      pollTimer = setInterval(fetchAndUpdate, 5000);
+
+    })();
+    </script>
   </body>
 </html>
