@@ -91,7 +91,10 @@ async def get_chart_data(incident_id: str):
             points_t.append(float(t_val))
             points_s.append(float(s_val))
             ts_str = str(ts) if ts is not None else ""
-            times.append(ts_str.split(" ")[1] if " " in ts_str else ts_str)
+            if " " in ts_str:
+                # Convert "YYYY-MM-DD HH:MM:SS" to "YYYY-MM-DDTHH:MM:SSZ"
+                ts_str = ts_str.replace(" ", "T") + "Z"
+            times.append(ts_str)
 
     return JSONResponse(
         {

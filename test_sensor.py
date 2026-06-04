@@ -390,6 +390,8 @@ class TestGraphAPI:
         assert resp.status_code == 200
         body = resp.json()
         assert len(body["times"])  == 5
+        assert body["times"][0] == "2025-01-01T12:00:00Z"
+        assert body["times"][-1] == "2025-01-01T12:04:00Z"
         assert len(body["temp"])   == 5
         assert len(body["smoke"])  == 5
         assert body["temp"][0]     == pytest.approx(28.0)

@@ -308,7 +308,16 @@
           if (normT.length) peakTempPct  = Math.max(...normT);
           if (normS.length) peakSmokePct = Math.max(...normS);
 
-          chart.data.labels           = data.times || [];
+          // Parse full UTC ISO strings to local browser HH:MM:SS
+          const localTimes = (data.times || []).map(t => {
+            if (t && t.endsWith('Z')) {
+               const d = new Date(t);
+               return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+            }
+            return t; 
+          });
+
+          chart.data.labels           = localTimes;
           chart.data.datasets[0].data = normS;   // bars
           chart.data.datasets[1].data = normT;   // line
           highlightPeakTicks();   // calls chart.update('none') internally
