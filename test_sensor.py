@@ -4,19 +4,31 @@ test_sensor.py — Integration tests for Lab Safety Monitor API.
 Dùng FastAPI TestClient (in-process) thay vì HTTP tới localhost.
 Không cần chạy server — không bị lỗi "Connection refused".
 
-Chạy:  python -m pytest test_sensor.py -v
-Hoặc:  python test_sensor.py
+Chạy:      python -m pytest test_sensor.py -v
+Unit test: python test_sensor.py
+Injector:  python test_sensor.py --inject <vercel-url> [--loop]
 """
 
-import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+# ── stdlib luôn import trước (cần cho inject mode trước khi FastAPI load) ─
+import os
+import random
+import sys
+import time
 
-import pytest
-from fastapi.testclient import TestClient
+# ── Inject mode: skip tất cả FastAPI imports (tránh warning + overhead) ──
+_INJECT_MODE = "--inject" in sys.argv
+
+if not _INJECT_MODE:
+    import datetime
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import pytest
+    from fastapi.testclient import TestClient
 
 # ── Patch database TRƯỚC khi import app ──────────────────────────────────
 # Tạo mock db trả về kết quả giống libsql-client thật
-mock_db = AsyncMock()
+if not _INJECT_MODE:
+    mock_db = AsyncMock()
 
 
 def _make_result(rows):
@@ -176,25 +188,29 @@ async def _mock_execute(query: str, params=None):
     return _make_result([])
 
 
-mock_db.execute = AsyncMock(side_effect=_mock_execute)
-mock_db.close = AsyncMock()
+if not _INJECT_MODE:
+    mock_db.execute = AsyncMock(side_effect=_mock_execute)
+    mock_db.close = AsyncMock()
 
-# Patch database module trước khi FastAPI app được import
-with patch.dict("os.environ", {"TURSO_DATABASE_URL": "", "TURSO_AUTH_TOKEN": ""}):
-    import app.database as database
-    database.db = mock_db
+    # Patch database module trước khi FastAPI app được import
+    with patch.dict("os.environ", {"TURSO_DATABASE_URL": "", "TURSO_AUTH_TOKEN": ""}):
+        import app.database as database
+        database.db = mock_db
 
-    from api.index import app
+        from api.index import app
 
-client = TestClient(app)
+    client = TestClient(app)
 
 
 # ── ANSI colors cho output đẹp ───────────────────────────────────────────
-G = "\x1b[32m"
-R = "\x1b[31m"
-C = "\x1b[36m"
-Y = "\x1b[33m"
-X = "\x1b[0m"
+if not _INJECT_MODE:
+    G = "\x1b[32m"
+    R = "\x1b[31m"
+    C = "\x1b[36m"
+    Y = "\x1b[33m"
+    X = "\x1b[0m"
+else:
+    G = R = C = Y = X = ""
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -448,11 +464,6 @@ class TestFullCycle:
 #   MONITOR_URL=https://your-project.vercel.app python test_sensor.py --inject
 # ═══════════════════════════════════════════════════════════════════════════
 
-import os
-import random
-import sys
-import time
-
 import requests as _requests
 
 
@@ -541,21 +552,48 @@ class LiveInjector:
 # Standalone runner
 # ═══════════════════════════════════════════════════════════════════════════
 
+# ── ANSI colors (cần cho cả inject mode lẫn test mode) ──────────────────
+G = "\x1b[32m"
+R = "\x1b[31m"
+C = "\x1b[36m"
+Y = "\x1b[33m"
+X = "\x1b[0m"
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
 
     # ── Chế độ inject ────────────────────────────────────────────────────
     if "--inject" in args:
-        # Lấy URL từ --url flag hoặc env var MONITOR_URL
-        url_idx = args.index("--url") + 1 if "--url" in args else None
-        base_url = (
-            args[url_idx]
-            if url_idx and url_idx < len(args)
-            else os.getenv("MONITOR_URL", "")
-        )
+        inject_idx = args.index("--inject")
+
+        # Hỗ trợ 3 cách truyền URL:
+        #   --inject https://...          (positional ngay sau flag)
+        #   --inject --url https://...    (named flag)
+        #   MONITOR_URL=... --inject      (env var)
+        base_url = ""
+
+        # 1. Positional: arg ngay sau --inject nếu không bắt đầu bằng --
+        if inject_idx + 1 < len(args) and not args[inject_idx + 1].startswith("-"):
+            base_url = args[inject_idx + 1]
+        # 2. Named flag --url
+        elif "--url" in args:
+            url_idx = args.index("--url") + 1
+            if url_idx < len(args):
+                base_url = args[url_idx]
+        # 3. Env var
         if not base_url:
-            print(f"{R}Lỗi: Cần truyền URL qua --url hoặc biến môi trường MONITOR_URL{X}")
-            print(f"  Ví dụ: python test_sensor.py --inject --url https://your-project.vercel.app")
+            base_url = os.getenv("MONITOR_URL", "")
+
+        # Tự động thêm https:// nếu thiếu scheme
+        if base_url and not base_url.startswith("http"):
+            base_url = "https://" + base_url
+
+        if not base_url:
+            print(f"{R}Lỗi: Cần truyền Vercel URL (không phải Turso DB URL!){X}")
+            print(f"  python test_sensor.py --inject https://your-app.vercel.app")
+            print(f"  python test_sensor.py --inject --url https://your-app.vercel.app")
+            print(f"  MONITOR_URL=https://your-app.vercel.app python test_sensor.py --inject")
             sys.exit(1)
 
         infinite = "--loop" in args
