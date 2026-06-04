@@ -4,11 +4,25 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 import app.database as database
+from app.config import CONFIG
 
 
 __all__ = ["router"]
 
 router = APIRouter()
+
+# Fixed Y-axis scale ceilings.
+# These are sized so the configured critical thresholds land at exactly 70%:
+#   temp  threshold (default 45°C) / 0.70 ≈ 64 → rounded up to 70°C
+#   smoke threshold (default 300 ADC) / 0.70 ≈ 428 → rounded up to 500 ADC
+# Keeping these fixed means the graph NEVER rebuilds its scale when peak
+# values roll out of the window.
+_TEMP_SCALE_MAX  = float(CONFIG.get_nested("ui", "graph", "temp_scale_max",  default=70))
+_SMOKE_SCALE_MAX = float(CONFIG.get_nested("ui", "graph", "smoke_scale_max", default=500))
+
+# Band thresholds (percentage of full scale)
+_WARN_PCT     = 60.0   # safe → warning boundary
+_CRITICAL_PCT = 70.0   # warning → critical boundary
 
 
 @router.get("/api/analytics/data/{incident_id}")
@@ -87,5 +101,11 @@ async def get_chart_data(incident_id: str):
             "status": current_status,
             "incident_id": incident_id,
             "is_active": is_active,
+            # Fixed scale anchors — client MUST use these for normalization.
+            # Never derive scale from window min/max.
+            "scale_temp_max":  _TEMP_SCALE_MAX,
+            "scale_smoke_max": _SMOKE_SCALE_MAX,
+            "warn_pct":        _WARN_PCT,
+            "critical_pct":    _CRITICAL_PCT,
         }
     )
