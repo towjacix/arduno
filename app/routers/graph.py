@@ -1,9 +1,7 @@
 import re
 from typing import cast
 
-import pygal
 from fastapi import APIRouter, Response
-from pygal.style import Style
 
 import app.database as database
 
@@ -12,22 +10,26 @@ __all__ = ["router"]
 
 router = APIRouter()
 
-# ── Pygal custom dark style matching the dashboard theme ────────────────────
-_CHART_STYLE = Style(
-    background="#1e1e20",
-    plot_background="transparent",
-    foreground="#9e9e9e",
-    foreground_strong="#e0e0e0",
-    foreground_subtle="#455a64",
-    guide_stroke_color="rgba(255,255,255,0.14)",
-    # Series colors: [0] = smoke bars (blue), [1] = temp line (orange-red)
-    colors=("#2196f3", "#ff5722"),
-    font_family="'Outfit', 'Segoe UI', sans-serif",
-    label_font_size=11,
-    legend_font_size=12,
-    tooltip_font_size=11,
-    title_font_size=0,
-)
+
+# ── SVG dimensions & padding ──────────────────────────────────────────────────
+_W, _H = 900, 260
+_PAD_L, _PAD_R, _PAD_T, _PAD_B = 56, 24, 28, 38
+
+
+def _bezier_path(coords: list[tuple[float, float]]) -> str:
+    """Tạo SVG path dùng Cubic Bezier để đường nhiệt độ mượt mà."""
+    if len(coords) < 2:
+        x, y = coords[0]
+        return f"M {x:.1f},{y:.1f}"
+
+    d = [f"M {coords[0][0]:.1f},{coords[0][1]:.1f}"]
+    for i in range(1, len(coords)):
+        x0, y0 = coords[i - 1]
+        x1, y1 = coords[i]
+        cx = (x0 + x1) / 2.0
+        # Cubic bezier: 2 control points at horizontal midpoint
+        d.append(f"C {cx:.1f},{y0:.1f} {cx:.1f},{y1:.1f} {x1:.1f},{y1:.1f}")
+    return " ".join(d)
 
 
 def _build_svg(
@@ -36,114 +38,135 @@ def _build_svg(
     times: list[str],
     zoom: str,
 ) -> str:
-    """Vẽ pygal combo chart: khói dạng Bar (blue) + nhiệt độ dạng Line (orange-red).
-    Cả 2 đã normalize 0-100% nên dùng 1 trục Y chung, nhãn thật hiển thị trên tooltip.
+    """Vẽ combo chart: khói dạng Bar (blue rects) + nhiệt độ dạng Bezier Line (orange-red).
+    Cả 2 normalize 0-100% trên cùng 1 trục Y.
     """
+    chart_w = _W - _PAD_L - _PAD_R
+    chart_h = _H - _PAD_T - _PAD_B
+    y_base = _H - _PAD_B
+    n = len(points_t)
+
     # ── 1. Normalize nhiệt độ ─────────────────────────────────────────────
-    min_span_t = 2.0 if zoom == "detail" else 40.0
+    min_span_t = 2.0 if zoom == "detail" else 10.0
     min_t, max_t = min(points_t), max(points_t)
     span_t = max_t - min_t
     if span_t < min_span_t:
         diff = min_span_t - span_t
-        min_t = max(20.0, min_t - diff / 2.0)
+        min_t = max(0.0, min_t - diff / 2.0)
         max_t = min_t + min_span_t
         span_t = min_span_t
     norm_t = [(v - min_t) / span_t * 100.0 for v in points_t]
 
     # ── 2. Normalize khói ─────────────────────────────────────────────────
-    min_span_s = 50.0 if zoom == "detail" else 300.0
-    min_s = min(points_s) if points_s else 0.0
-    max_s = max(points_s) if points_s else 300.0
+    min_span_s = 50.0 if zoom == "detail" else 200.0
+    min_s, max_s = 0.0, max(points_s) if points_s else 300.0
     span_s = max_s - min_s
     if span_s < min_span_s:
-        diff = min_span_s - span_s
-        min_s = max(0.0, min_s - diff / 2.0)
         max_s = min_s + min_span_s
         span_s = min_span_s
-    norm_s = [(s - min_s) / span_s * 100.0 for s in points_s]
+    norm_s = [min(100.0, (s - min_s) / span_s * 100.0) for s in points_s]
 
-    # ── 3. Tính mid values cho Y-axis labels ──────────────────────────────
+    # ── 3. Helpers vị trí ─────────────────────────────────────────────────
+    def xc(i: int) -> float:
+        """Tâm X của điểm i."""
+        return _PAD_L + (i / (n - 1)) * chart_w if n > 1 else _PAD_L + chart_w / 2
+
+    def yp(pct: float) -> float:
+        """Y từ 0-100% (0% = đáy, 100% = đỉnh)."""
+        return y_base - (pct / 100.0) * chart_h
+
+    # ── 4. Màu sắc ────────────────────────────────────────────────────────
+    COL_TEMP  = "#ff5722"
+    COL_SMOKE = "#2196f3"
+    COL_GRID  = "rgba(255,255,255,0.10)"
+    COL_TEXT  = "#9e9e9e"
+    COL_AX    = "#37474f"
+
+    # ── 5. Grid lines ngang (0%, 25%, 50%, 75%, 100%) ─────────────────────
     mid_t = (max_t + min_t) / 2.0
-    mid_s = (max_s + min_s) / 2.0
+    y_ticks = {
+        100: f"{max_t:.0f}°C",
+        50:  f"{mid_t:.0f}°C",
+        0:   f"{min_t:.0f}°C",
+    }
+    grids = ""
+    for pct, lbl in y_ticks.items():
+        yg = yp(float(pct))
+        dash = "4,4" if pct in (25, 75) else "6,4"
+        grids += (
+            f'<line x1="{_PAD_L}" y1="{yg:.1f}" x2="{_W - _PAD_R}" y2="{yg:.1f}" '
+            f'stroke="{COL_GRID}" stroke-dasharray="{dash}"/>'
+            f'<text x="{_PAD_L - 6}" y="{yg + 4:.1f}" text-anchor="end" '
+            f'fill="{COL_TEXT}" font-size="11" font-family="Outfit,sans-serif">{lbl}</text>'
+        )
 
-    # ── 4. Chọn X-axis labels (thưa dần cho nhiều điểm) ──────────────────
-    n = len(times)
-    if n <= 12:
-        x_labels = times
-    else:
-        # Giữ nhãn đầu, cuối, và đều đặn tối đa 10 nhãn ở giữa
-        step = max(1, n // 10)
-        x_labels = [t if (i == 0 or i == n - 1 or i % step == 0) else "" for i, t in enumerate(times)]
+    # ── 6. Smoke bars (rect) ──────────────────────────────────────────────
+    bar_gap = 0.18          # tỷ lệ khoảng cách giữa các bar
+    slot_w  = chart_w / n if n > 1 else chart_w
+    bar_w   = max(2.0, slot_w * (1 - bar_gap))
+    bars = ""
+    for i, pct in enumerate(norm_s):
+        bh  = pct / 100.0 * chart_h
+        bx  = _PAD_L + (i / n) * chart_w + (slot_w - bar_w) / 2
+        by  = y_base - bh
+        tip = f"{points_s[i]:.0f} ADC"
+        bars += (
+            f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bar_w:.1f}" height="{bh:.1f}" '
+            f'rx="2" fill="{COL_SMOKE}" fill-opacity="0.75">'
+            f'<title>{tip}</title></rect>'
+        )
 
-    # ── 5. Build pygal Bar chart ──────────────────────────────────────────
-    chart = pygal.Bar(
-        style=_CHART_STYLE,
-        width=900,
-        height=260,
-        show_legend=False,           # legend riêng trong zoom_bar HTML
-        show_y_labels=True,
-        show_x_labels=True,
-        x_label_rotation=0,
-        y_labels_major_every=2,
-        show_minor_y_labels=False,
-        show_dots=True,
-        dots_size=3,
-        stroke=True,
-        stroke_style={"width": 2.2, "linecap": "round", "linejoin": "round"},
-        fill=False,
-        margin=4,
-        margin_left=55,
-        margin_right=55,
-        margin_top=12,
-        margin_bottom=20,
-        legend_at_bottom=False,
-        truncate_label=-1,
-        show_x_guides=False,
-        show_y_guides=True,
-        inner_radius=0,
-        spacing=2,
-        y_title=None,
-        x_title=None,
+    # ── 7. Temperature Bezier line + area fill ────────────────────────────
+    coords_t = [(xc(i), yp(p)) for i, p in enumerate(norm_t)]
+    path_d   = _bezier_path(coords_t)
+    x0, xn_  = coords_t[0][0], coords_t[-1][0]
+
+    # Vùng fill phía dưới đường nhiệt độ (rất nhẹ)
+    fill_area = (
+        f'<path d="{path_d} L {xn_:.1f},{y_base} L {x0:.1f},{y_base} Z" '
+        f'fill="{COL_TEMP}" fill-opacity="0.08" stroke="none"/>'
+    )
+    # Đường chính
+    line_temp = (
+        f'<path d="{path_d}" fill="none" stroke="{COL_TEMP}" '
+        f'stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>'
+    )
+    # Dots tại mỗi điểm đo
+    dots = ""
+    for i, (cx_, cy_) in enumerate(coords_t):
+        r    = 4.5 if norm_t[i] == max(norm_t) else 3.0
+        tip  = f"{points_t[i]:.1f}°C"
+        dots += (
+            f'<circle cx="{cx_:.1f}" cy="{cy_:.1f}" r="{r}" '
+            f'fill="{COL_TEMP}" stroke="#1e1e20" stroke-width="1.2">'
+            f'<title>{tip}</title></circle>'
+        )
+
+    # ── 8. Trục X ─────────────────────────────────────────────────────────
+    # Hiển thị tối đa 10 nhãn, ưu tiên đầu / đuôi / đều đặn
+    step   = max(1, n // 10)
+    x_axis = (
+        f'<line x1="{_PAD_L}" y1="{y_base}" x2="{_W - _PAD_R}" y2="{y_base}" '
+        f'stroke="{COL_AX}" stroke-width="1"/>'
+    )
+    for i, t in enumerate(times):
+        if i != 0 and i != n - 1 and i % step != 0:
+            continue
+        anchor = "start" if i == 0 else ("end" if i == n - 1 else "middle")
+        x_axis += (
+            f'<text x="{xc(i):.1f}" y="{_H - 8}" text-anchor="{anchor}" '
+            f'fill="{COL_TEXT}" font-size="11" font-family="Outfit,sans-serif">{t}</text>'
+        )
+
+    # ── 9. Assemble SVG ───────────────────────────────────────────────────
+    return (
+        f'<svg viewBox="0 0 {_W} {_H}" xmlns="http://www.w3.org/2000/svg" '
+        f'style="width:100%;height:auto;display:block;overflow:visible;">'
+        f"{grids}{bars}{fill_area}{line_temp}{dots}{x_axis}"
+        f"</svg>"
     )
 
-    # Y labels: hiển thị giá trị thực bên trái (°C) và phải (ADC)
-    chart.y_labels = [
-        {"value": 0,   "label": f"{min_t:.0f}°C"},
-        {"value": 50,  "label": f"{mid_t:.0f}°C"},
-        {"value": 100, "label": f"{max_t:.0f}°C"},
-    ]
 
-    chart.x_labels = x_labels
-
-    # Smoke bars — tooltip hiển thị giá trị ADC thật
-    smoke_data = [
-        {"value": pct, "label": f"{points_s[i]:.0f} ADC", "xlink": None}
-        for i, pct in enumerate(norm_s)
-    ]
-    chart.add("Khói (ADC)", smoke_data)
-
-    # Temperature line overlay — tooltip hiển thị °C thật
-    temp_data = [
-        {"value": pct, "label": f"{points_t[i]:.1f}°C", "xlink": None}
-        for i, pct in enumerate(norm_t)
-    ]
-    chart.add("Nhiệt độ (°C)", temp_data, plotas="line")
-
-    # ── 6. Render & patch SVG ─────────────────────────────────────────────
-    svg_raw = chart.render().decode("utf-8")
-
-    # Strip XML declaration và DOCTYPE (nếu có) để nhúng inline sạch
-    svg_raw = re.sub(r"<\?xml[^?]*\?>", "", svg_raw).strip()
-
-    # Patch: thêm style responsive vào thẻ <svg> gốc
-    svg_patched = re.sub(
-        r"<svg ",
-        '<svg style="width:100%;height:auto;display:block;overflow:visible;" ',
-        svg_raw,
-        count=1,
-    )
-
-    return svg_patched
 
 
 @router.get("/api/analytics/graph/{incident_id}")
