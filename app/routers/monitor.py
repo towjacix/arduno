@@ -229,8 +229,9 @@ async def get_status_html():
 
 
 @router.get("/api/history", response_class=HTMLResponse)
-async def get_history_html(offset: int = 0, limit: int = 20):
-    """Lấy lịch sử cảnh báo với phân trang Infinite Scroll qua HTMX."""
+async def get_history_html(offset: int = 0, limit: int = 20, search_id: str = ""):
+    """Lấy lịch sử cảnh báo với phân trang Infinite Scroll qua HTMX.
+    Nếu search_id được truyền, lọc theo ID sự cố cụ thể."""
     if database.db is None:
         if offset == 0:
             return HTMLResponse(
@@ -239,11 +240,26 @@ async def get_history_html(offset: int = 0, limit: int = 20):
         else:
             return HTMLResponse('<tr><td colspan="5" class="center-align">Offline</td></tr>')
 
-    res = await database.db.execute(
-        "SELECT incident_id, start_time, end_time, peak_temp "
-        "FROM incidents ORDER BY incident_id DESC LIMIT ? OFFSET ?",
-        [limit, offset]
-    )
+    if search_id.strip():
+        # Search mode: look up a specific incident by ID
+        try:
+            sid = int(search_id.strip())
+        except ValueError:
+            return HTMLResponse(
+                '<tbody id="history-body"><tr><td colspan="5" class="center-align">'
+                'ID không hợp lệ — vui lòng nhập số nguyên.</td></tr></tbody>'
+            )
+        res = await database.db.execute(
+            "SELECT incident_id, start_time, end_time, peak_temp "
+            "FROM incidents WHERE incident_id = ?",
+            [sid],
+        )
+    else:
+        res = await database.db.execute(
+            "SELECT incident_id, start_time, end_time, peak_temp "
+            "FROM incidents ORDER BY incident_id DESC LIMIT ? OFFSET ?",
+            [limit, offset]
+        )
 
     rows = []
     for r in res.rows:
@@ -268,7 +284,7 @@ async def get_history_html(offset: int = 0, limit: int = 20):
         )
 
     # Nếu số lượng bản ghi trả về bằng limit, tức là có thể còn dữ liệu tiếp theo
-    if len(res.rows) == limit:
+    if not search_id.strip() and len(res.rows) == limit:
         next_offset = offset + limit
         rows.append(
             f'<tr id="load-more" '
