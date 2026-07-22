@@ -219,14 +219,14 @@ else:
 
 
 class TestMonitorAPI:
-    """Test /api/monitor endpoint transitions."""
+    """Test /api/sensor endpoint transitions."""
 
     def setup_method(self):
         _reset_state()
 
     def test_safe_reading(self):
         """Gửi dữ liệu an toàn — hệ thống phải ở trạng thái 'safe'."""
-        resp = client.post("/api/monitor", json={"temp": 28.5, "smoke": 90})
+        resp = client.post("/api/sensor", json={"temperature": 28.5, "humidity": 50.0, "smoke": 90, "alarm": False})
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "safe"
@@ -234,7 +234,7 @@ class TestMonitorAPI:
 
     def test_critical_transition(self):
         """Nhiệt độ vượt ngưỡng → hệ thống chuyển sang 'critical'."""
-        resp = client.post("/api/monitor", json={"temp": 60.0, "smoke": 400})
+        resp = client.post("/api/sensor", json={"temperature": 60.0, "humidity": 50.0, "smoke": 400, "alarm": False})
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "critical"
@@ -242,7 +242,7 @@ class TestMonitorAPI:
 
     def test_incident_created_on_critical(self):
         """Khi chuyển sang critical, một incident mới phải được tạo."""
-        client.post("/api/monitor", json={"temp": 60.0, "smoke": 400})
+        client.post("/api/sensor", json={"temperature": 60.0, "humidity": 50.0, "smoke": 400, "alarm": False})
         assert len(_incidents) == 1
         assert _incidents[0]["end_time"] == "Active"
         assert _incidents[0]["peak_temp"] == 60.0
@@ -250,17 +250,17 @@ class TestMonitorAPI:
 
     def test_peak_temp_update(self):
         """Peak temp phải được cập nhật khi có giá trị cao hơn."""
-        client.post("/api/monitor", json={"temp": 55.0, "smoke": 400})
-        client.post("/api/monitor", json={"temp": 65.0, "smoke": 500})
+        client.post("/api/sensor", json={"temperature": 55.0, "humidity": 50.0, "smoke": 400, "alarm": False})
+        client.post("/api/sensor", json={"temperature": 65.0, "humidity": 50.0, "smoke": 500, "alarm": False})
         assert _incidents[0]["peak_temp"] == 65.0
         print(f"{Y}✓ Peak temp updated to 65.0°C{X}")
 
     def test_safe_recovery(self):
         """Hạ nhiệt → hệ thống phải chuyển về 'safe' (với hysteresis)."""
         # Trigger critical
-        client.post("/api/monitor", json={"temp": 60.0, "smoke": 400})
+        client.post("/api/sensor", json={"temperature": 60.0, "humidity": 50.0, "smoke": 400, "alarm": False})
         # Cool down dưới ngưỡng - hysteresis
-        resp = client.post("/api/monitor", json={"temp": 25.0, "smoke": 50})
+        resp = client.post("/api/sensor", json={"temperature": 25.0, "humidity": 50.0, "smoke": 50, "alarm": False})
         assert resp.json()["status"] == "safe"
         assert _incidents[0]["end_time"] != "Active"
         print(f"{G}✓ System recovered to safe{X}")
@@ -268,16 +268,16 @@ class TestMonitorAPI:
     def test_hysteresis_prevents_flicker(self):
         """Nhiệt ở sát ngưỡng → hysteresis giữ critical, không flicker."""
         # Trigger critical
-        client.post("/api/monitor", json={"temp": 60.0, "smoke": 400})
+        client.post("/api/sensor", json={"temperature": 60.0, "humidity": 50.0, "smoke": 400, "alarm": False})
         # Gửi temp ngay dưới threshold nhưng trên (threshold - hysteresis)
         # threshold mặc định 45, hysteresis 2 → cần < 43 để về safe
-        resp = client.post("/api/monitor", json={"temp": 44.0, "smoke": 50})
+        resp = client.post("/api/sensor", json={"temperature": 44.0, "humidity": 50.0, "smoke": 50, "alarm": False})
         assert resp.json()["status"] == "critical"
         print(f"{Y}✓ Hysteresis prevented state flicker{X}")
 
     def test_log_recorded(self):
         """Mỗi POST đều ghi log vào burning_logs."""
-        client.post("/api/monitor", json={"temp": 30.0, "smoke": 100})
+        client.post("/api/sensor", json={"temperature": 30.0, "humidity": 50.0, "smoke": 100, "alarm": False})
         assert len(_logs) == 1
         assert _logs[0]["temp"] == 30.0
         assert _logs[0]["incident_id"] == 0
@@ -443,21 +443,21 @@ class TestFullCycle:
         """Mô phỏng đầy đủ: phòng bình thường → cháy → dập lửa → an toàn."""
         # Phase 1: Safe readings (seed ambient data)
         for _ in range(5):
-            r = client.post("/api/monitor", json={"temp": 28.0, "smoke": 90})
+            r = client.post("/api/sensor", json={"temperature": 28.0, "humidity": 50.0, "smoke": 90, "alarm": False})
             assert r.json()["status"] == "safe"
 
         # Phase 2: Fire breaks out
-        r = client.post("/api/monitor", json={"temp": 60.0, "smoke": 500})
+        r = client.post("/api/sensor", json={"temperature": 60.0, "humidity": 50.0, "smoke": 500, "alarm": False})
         assert r.json()["status"] == "critical"
         assert len(_incidents) == 1
 
         # Phase 3: Fire escalates — peak update
-        r = client.post("/api/monitor", json={"temp": 72.0, "smoke": 700})
+        r = client.post("/api/sensor", json={"temperature": 72.0, "humidity": 50.0, "smoke": 700, "alarm": False})
         assert r.json()["status"] == "critical"
         assert _incidents[0]["peak_temp"] == 72.0
 
         # Phase 4: Cooldown
-        r = client.post("/api/monitor", json={"temp": 25.0, "smoke": 50})
+        r = client.post("/api/sensor", json={"temperature": 25.0, "humidity": 50.0, "smoke": 50, "alarm": False})
         assert r.json()["status"] == "safe"
         assert _incidents[0]["end_time"] != "Active"
 
@@ -486,7 +486,7 @@ class LiveInjector:
     """Gửi dữ liệu cảm biến giả lập tới Vercel API thật → ghi vào Turso DB."""
 
     def __init__(self, base_url: str):
-        self.url = base_url.rstrip("/") + "/api/monitor"
+        self.url = base_url.rstrip("/") + "/api/sensor"
         print(f"\n{C}{'═' * 62}")
         print("   LIVE DATA INJECTOR — Lab Safety Monitor")
         print(f"   Target: {self.url}")
@@ -497,7 +497,7 @@ class LiveInjector:
         try:
             r = _requests.post(
                 self.url,
-                json={"temp": round(temp, 1), "smoke": smoke},
+                json={"temperature": round(temp, 1), "humidity": 50.0, "smoke": smoke, "alarm": False},
                 timeout=10,
             )
             status = r.json().get("status", "?").upper()
