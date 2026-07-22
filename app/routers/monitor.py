@@ -37,7 +37,7 @@ async def get_dynamic_threshold() -> int:
     return int(base_temp + offset)
 
 
-@router.post("/api/monitor")
+@router.post("/api/sensor")
 async def monitor_system(data: MonitorPayload):
     if database.db is None:
         return Response(status_code=500)
