@@ -37,7 +37,7 @@ async def get_dynamic_threshold() -> int:
     return int(base_temp + offset)
 
 
-@router.post("/api/sensor")
+@router.post("/api/monitor")
 async def monitor_system(data: MonitorPayload):
     if database.db is None:
         return Response(status_code=500)
@@ -63,12 +63,15 @@ async def monitor_system(data: MonitorPayload):
     hysteresis = int(CONFIG.get_nested("hysteresis", default=2))
     if old_status == "safe":
         new_status = (
-            "critical" if data.temp > threshold or data.smoke > smoke_limit else "safe"
+            "critical"
+            if data.temperature > threshold or data.smoke > smoke_limit
+            else "safe"
         )
     else:
         new_status = (
             "safe"
-            if data.temp <= (threshold - hysteresis) and data.smoke <= smoke_limit
+            if data.temperature <= (threshold - hysteresis)
+            and data.smoke <= smoke_limit
             else "critical"
         )
 
@@ -108,7 +111,7 @@ async def monitor_system(data: MonitorPayload):
                 # Sự cố hoàn toàn mới
                 await database.db.execute(
                     "INSERT INTO incidents (start_time, end_time, peak_temp) VALUES (?, 'Active', ?)",
-                    [now, data.temp],
+                    [now, data.temperature],
                 )
 
         inc_res = await database.db.execute(
@@ -124,11 +127,11 @@ async def monitor_system(data: MonitorPayload):
 
             old_peak = float(raw_peak) if isinstance(raw_peak, (int, float)) else 0.0
 
-            if data.temp > old_peak:
+            if data.temperature > old_peak:
                 # FIX: Dùng inc_id (đã resolve) thay vì active_inc_id = 0
                 await database.db.execute(
                     "UPDATE incidents SET peak_temp = ? WHERE incident_id = ?",
-                    [data.temp, inc_id],
+                    [data.temperature, inc_id],
                 )
 
     elif old_status == "critical" and new_status == "safe":
@@ -139,22 +142,24 @@ async def monitor_system(data: MonitorPayload):
     # Ghi log liên tục vào burning_logs — FIX: dùng active_inc_id đã được cập nhật đúng
     await database.db.execute(
         "INSERT INTO burning_logs (incident_id, timestamp, temp, smoke) VALUES (?, ?, ?, ?)",
-        [active_inc_id, now, data.temp, data.smoke],
+        [active_inc_id, now, data.temperature, data.smoke],
     )
 
     await database.db.execute(
         "UPDATE system_state SET status=?, timestamp=?, temp=?, smoke=?, "
         "current_dynamic_threshold=? WHERE id=1",
-        [new_status, now, data.temp, data.smoke, threshold],
+        [new_status, now, data.temperature, data.smoke, threshold],
     )
     # ── Level classification (for Arduino buzzer) ─────────────────────────
     # We provide temp_pct and smoke_pct for the graph overlay.
     # Level: safe < 60% | warning 60–70% | critical > 70%
-    _temp_ceil  = float(CONFIG.get_nested("ui", "graph", "temp_scale_max",  default=70))
-    _smoke_ceil = float(CONFIG.get_nested("ui", "graph", "smoke_scale_max", default=1023))
-    temp_pct  = min(100.0, data.temp  / _temp_ceil  * 100.0)
+    _temp_ceil = float(CONFIG.get_nested("ui", "graph", "temp_scale_max", default=70))
+    _smoke_ceil = float(
+        CONFIG.get_nested("ui", "graph", "smoke_scale_max", default=1023)
+    )
+    temp_pct = min(100.0, data.temperature / _temp_ceil * 100.0)
     smoke_pct = min(100.0, data.smoke / _smoke_ceil * 100.0)
-    peak_pct  = max(temp_pct, smoke_pct)
+    peak_pct = max(temp_pct, smoke_pct)
 
     # Buzzer must ALWAYS fire if the database state is critical.
     if new_status == "critical":
@@ -165,9 +170,9 @@ async def monitor_system(data: MonitorPayload):
         level = "safe"
 
     return {
-        "status":    new_status,
-        "level":     level,          # "safe" | "warning" | "critical"
-        "temp_pct":  round(temp_pct,  1),
+        "status": new_status,
+        "level": level,  # "safe" | "warning" | "critical"
+        "temp_pct": round(temp_pct, 1),
         "smoke_pct": round(smoke_pct, 1),
     }
 
@@ -260,7 +265,9 @@ async def get_history_html(offset: int = 0, limit: int = 20, search_id: str = ""
                 '<tbody id="history-body"><tr><td colspan="5" class="center-align">Offline</td></tr></tbody>'
             )
         else:
-            return HTMLResponse('<tr><td colspan="5" class="center-align">Offline</td></tr>')
+            return HTMLResponse(
+                '<tr><td colspan="5" class="center-align">Offline</td></tr>'
+            )
 
     if search_id.strip():
         # Search mode: look up a specific incident by ID
@@ -269,7 +276,7 @@ async def get_history_html(offset: int = 0, limit: int = 20, search_id: str = ""
         except ValueError:
             return HTMLResponse(
                 '<tbody id="history-body"><tr><td colspan="5" class="center-align">'
-                'ID không hợp lệ — vui lòng nhập số nguyên.</td></tr></tbody>'
+                "ID không hợp lệ — vui lòng nhập số nguyên.</td></tr></tbody>"
             )
         res = await database.db.execute(
             "SELECT incident_id, start_time, end_time, peak_temp "
@@ -280,7 +287,7 @@ async def get_history_html(offset: int = 0, limit: int = 20, search_id: str = ""
         res = await database.db.execute(
             "SELECT incident_id, start_time, end_time, peak_temp "
             "FROM incidents ORDER BY incident_id DESC LIMIT ? OFFSET ?",
-            [limit, offset]
+            [limit, offset],
         )
 
     rows = []
@@ -313,7 +320,7 @@ async def get_history_html(offset: int = 0, limit: int = 20, search_id: str = ""
             f'hx-get="/api/history?offset={next_offset}&limit={limit}" '
             f'hx-trigger="revealed" hx-target="#load-more" hx-swap="outerHTML">'
             f'<td colspan="5" class="center-align"><progress class="circle small"></progress> Đang tải thêm...</td>'
-            f'</tr>'
+            f"</tr>"
         )
 
     tbody_content = "".join(rows)
@@ -321,10 +328,10 @@ async def get_history_html(offset: int = 0, limit: int = 20, search_id: str = ""
     if offset == 0:
         # Trang đầu tiên -> Trả về thẻ tbody đầy đủ
         if not tbody_content:
-            tbody_content = "<tr><td colspan='5' class='center-align'>Chưa có nhật ký</td></tr>"
-        return HTMLResponse(
-            f'<tbody id="history-body">{tbody_content}</tbody>'
-        )
+            tbody_content = (
+                "<tr><td colspan='5' class='center-align'>Chưa có nhật ký</td></tr>"
+            )
+        return HTMLResponse(f'<tbody id="history-body">{tbody_content}</tbody>')
     else:
         # Các trang sau -> Chỉ trả về các hàng tr
         return HTMLResponse(tbody_content)
