@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 
 
 class MonitorPayload(BaseModel):
-    temp: float = Field(default=..., description="Nhiệt độ (°C)")
+    temperature: float = Field(default=..., description="Nhiệt độ (°C)")
     smoke: int = Field(default=..., description="Chỉ số khói MQ-2")
 
 
